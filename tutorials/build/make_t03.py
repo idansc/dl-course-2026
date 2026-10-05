@@ -13,13 +13,14 @@ md(rf"""
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/idansc/dl-course-2026/blob/main/tutorials/{STEM}.ipynb)
 Recap slides: [{STEM}_recap.pdf](https://github.com/idansc/dl-course-2026/blob/main/tutorials/recap/{STEM}_recap.pdf)
 
-Plan for today (≈ 60 min + recap):
+Plan for today (≈ 75 min + recap):
 1. Lecture recap: tokens, RNN, BPTT, LSTM, language models, SSMs and linear attention (12 min)
 2. A byte-level BPE tokenizer trained on Tiny Shakespeare (10 min)
 3. RNN and LSTM cells by hand, matched to `nn.LSTM`; a character-level LM and temperature sampling (17 min)
 4. A diagonal linear SSM and linear attention: recurrent form = convolution = scan; cost vs. softmax attention (18 min)
 5. Gradients through time: how far back does the loss reach? (8 min)
-6. If time: a GRU cell by hand
+6. Factor Graph Attention: attention over several modalities; a synthetic VQA task (12 min)
+7. If time: a GRU cell by hand
 
 Runs on CPU (Colab or laptop) in a few minutes. Cells marked ✏️ are for you to try.
 <<STUDENT>>
@@ -75,6 +76,8 @@ From $c_t$ to $c_{t-1}$ the gradient is only multiplied elementwise by $f$, with
 - Mamba makes $\bar A,\bar B,C$ functions of the input (*selective*), which breaks the convolution; training uses a **parallel scan** instead.
 
 **Linear attention** drops the softmax: $y_t=\sum_{s\le t}(q_t^\top k_s)v_s = S_tq_t$ with $S_t=S_{t-1}+v_tk_t^\top$, the same kind of recurrent state (Mamba-2 makes the link exact). A fixed-size state cannot store every past token, so exact recall is weaker than attention → **hybrids**: mostly linear/SSM layers plus a few full-attention layers (Jamba, Nemotron-H, Qwen3-Next 3:1, Kimi Linear).
+
+**Attention over several modalities (Factor Graph Attention).** Each modality (image regions, question words, ...) gets a softmax belief over its entities from a learned, weighted sum of potentials: a unary score per entity and learned interaction grids with the other modalities, each collapsed by a learned marginal. Equations in section 6.
 """)
 
 # ---------------------------------------------------------------- BPE
@@ -721,9 +724,343 @@ print(f"dL/dv  : formula {dv:.10f}   autograd {v_q.grad.item():.10f}")
 print(f"dL/dw_h: formula {dwh:.10f}   autograd {w_h.grad.item():.10f}")
 """)
 
+# ---------------------------------------------------------------- FGA
+md(r"""
+## 6. Factor Graph Attention: attention over several modalities
+
+Lecture 7's attention attends over **one** set (encoder states, image regions) given a query. In visual question answering (VQA) and visual dialog there are several sets, and each should be attended in the context of the others. **Factor Graph Attention** (FGA; Schwartz, Schwing, Hazan, CVPR 2019) treats each set as a node of a factor graph.
+
+**Setup.** Modalities ("utilities") $U_1,\dots,U_M$; modality $i$ has $n_i$ entities with embeddings $\hat u\in\mathbb{R}^{d_i}$ (49 image regions, 15 question words, 100 candidate answers, ...). FGA outputs, per modality, a **belief** $b_i$ (a distribution over its $n_i$ entities) and an **attended vector** $a_i=\sum_u b_i(u)\,\hat u$.
+
+**Potentials** (one score per entity each):
+- **Unary**, is the entity salient on its own: $\psi_i(u)=v^\top\mathrm{relu}(V\hat u)$, $V\in\mathbb{R}^{d_i\times d_i}$, $v\in\mathbb{R}^{d_i}$.
+- **Pairwise** between modalities $i$ and $j$. Each side gets its own learned projection, $L\in\mathbb{R}^{d\times d_i}$, $R\in\mathbb{R}^{d\times d_j}$, $d=\max(d_i,d_j)$, and the interaction grid is the cosine
+$$C_{ij}(u,w)=\Big\langle \tfrac{L\hat u}{\lVert L\hat u\rVert},\tfrac{R\hat w}{\lVert R\hat w\rVert}\Big\rangle\in\mathbb{R}^{n_i\times n_j},$$
+batch-normalized over the flattened $n_in_j$ grid. A **learned marginal** collapses it into a message per entity, $\mu_{j\to i}(u)=\sum_{w}W_w\,\tilde C_{ij}(u,w)+c$, i.e. `Linear(n_j → 1)` applied to each row; the other side gets `Linear(n_i → 1)` applied to each column. One grid, two messages.
+- **Self**: the same construction with $j=i$ (own $L$, $R$), an entity in the context of its own modality.
+
+**Belief.** Stack the $K$ potentials that reach modality $i$ and mix them with a learned, bias-free weight vector:
+$$b_i(u)=\operatorname{softmax}_u\Big(\textstyle\sum_{k=1}^{K}w_k\,\psi_k(u)\Big),\qquad \texttt{Linear(K → 1, bias=False)}.$$
+
+Every stage is learned: the factors produce the grid ($L$, $R$), the marginal collapses it ($W$), the mix combines the potentials ($w$). Replacing any of them by a fixed operation (a frozen similarity matrix, a max or mean over the grid) is a different, weaker model; the BatchNorm on the grid matters too (VisDial ablation: MRR 0.6301 without, 0.6525 with).
+
+**High order.** The precursor, High-Order Attention (NeurIPS 2017), adds a **ternary** factor for multiple-choice VQA: $T(x,y,z)=\sum_d\tilde x_d\tilde y_d\tilde z_d$ over projected, normalized question words, regions and candidate answers, batch-normalized, with three learned marginals (`Linear(n_y n_z → 1)`, ...). It scores triples that no pair can see, at $n_xn_yn_z$ values per example.
+
+**Bridge to self-attention (Tutorial 4).** The self-interaction grid $\langle L\hat u, R\hat w\rangle$ over one modality $X$ is exactly $QK^\top$ with $Q=XL^\top$, $K=XR^\top$ (cosine instead of a $1/\sqrt d$ scale). Self-attention **keeps the full grid**: a softmax per row $u$ gives $n$ distributions and a new vector per entity, a sequence in, a sequence out. FGA **marginalizes** the grid to one score per entity: one distribution per modality and one pooled vector, which is what a VQA classifier consumes. Cross-attention is the pairwise grid kept per row in the same way.
+
+We implement the three pieces with the parameter names of the reference code (github.com/idansc/fga), check them against a naive loop, then train on a synthetic VQA task. Layout everywhere: `(batch, entities, channels)`.
+""")
+
+code(r"""
+def l2_normalize(x, eps=1e-12):
+    # x / ||x|| per row; an all-zero row (a masked entity) stays 0 with zero gradient (F.normalize gives NaN gradients there)
+    n2 = x.pow(2).sum(-1, keepdim=True)
+    return x * torch.where(n2 > eps, torch.rsqrt(n2.clamp_min(eps)), torch.zeros_like(n2))
+
+class Unary(nn.Module):
+    # ψ(u) = vᵀ relu(V û):  (B, n, d) -> (B, n)
+    def __init__(self, d, dropout=0.5):
+        super().__init__()
+        self.embed, self.feature_reduce, self.dropout = nn.Linear(d, d), nn.Linear(d, 1), dropout   # V, v
+
+    def forward(self, X):
+        #>> relu(V û), dropout on that hidden layer (F.dropout(..., training=self.training)), then vᵀ(·); squeeze the last axis
+        h = F.dropout(F.relu(self.embed(X)), p=self.dropout, training=self.training)
+        return self.feature_reduce(h).squeeze(-1)
+        #<<
+
+class Pairwise(nn.Module):
+    # cosine grid of learned projections -> BatchNorm over the flattened grid -> learned marginal per side
+    def __init__(self, dx, nx, dy=None, ny=None, self_interaction=False):
+        super().__init__()
+        dy, ny = (dx, nx) if dy is None else (dy, ny)
+        e = max(dx, dy)
+        self.nx, self.ny = nx, ny
+        self.embed_X, self.embed_Y = nn.Linear(dx, e), nn.Linear(dy, e)    # L and R
+        self.normalize_S = nn.BatchNorm1d(nx * ny)
+        self.margin_X = nn.Linear(ny, 1)                                    # message to X: collapses each row (n_Y values)
+        if not self_interaction:
+            self.margin_Y = nn.Linear(nx, 1)                                # message to Y: collapses each column (n_X values)
+
+    def forward(self, X, Y=None):
+        # X: (B, nx, dx); Y: (B, ny, dy), or None for the self-interaction (Y = X). Returns ψ_X (B, nx) [and ψ_Y (B, ny)]
+        #>> S = cosine grid (B, nx, ny) of the projected, l2-normalized X and Y; BatchNorm1d over the flattened grid, reshape back
+        x = l2_normalize(self.embed_X(X))
+        y = l2_normalize(self.embed_Y(X if Y is None else Y))
+        S = x @ y.transpose(1, 2)
+        S = self.normalize_S(S.reshape(-1, self.nx * self.ny)).view(-1, self.nx, self.ny)
+        #<<
+        #>> ψ_X = margin_X applied to every row of S, shape (B, nx)
+        psi_X = self.margin_X(S).squeeze(-1)
+        #<<
+        if Y is None:
+            return psi_X
+        #>> ψ_Y = margin_Y applied to every column of S, shape (B, ny)
+        psi_Y = self.margin_Y(S.transpose(1, 2)).squeeze(-1)
+        #<<
+        return psi_X, psi_Y
+""")
+
+md(r"""
+**Check:** Unary and Pairwise against explicit loops over entities. Eval mode, with random BatchNorm running statistics and affine parameters so the normalization is part of what is checked.
+""")
+
+code(r"""
+torch.manual_seed(0)
+Bsz, nq, nr, dq, dr = 4, 5, 9, 12, 20                      # 5 words of width 12, 9 regions of width 20
+Xq, Xr = torch.randn(Bsz, nq, dq), torch.randn(Bsz, nr, dr)
+
+un = Unary(dr).eval()
+V, bV, v, bv = un.embed.weight, un.embed.bias, un.feature_reduce.weight[0], un.feature_reduce.bias[0]
+loop_un = torch.tensor([[(v @ torch.relu(V @ Xr[b, j] + bV) + bv).item() for j in range(nr)] for b in range(Bsz)])
+print("Unary    vs loop  max diff:", (un(Xr) - loop_un).abs().max().item())
+
+pw = Pairwise(dq, nq, dr, nr)
+bn = pw.normalize_S
+with torch.no_grad():
+    bn.running_mean.uniform_(-.3, .3); bn.running_var.uniform_(.5, 2); bn.weight.uniform_(.5, 2); bn.bias.uniform_(-1, 1)
+pw.eval()
+psi_q, psi_r = pw(Xq, Xr)
+L, bL, R, bR = pw.embed_X.weight, pw.embed_X.bias, pw.embed_Y.weight, pw.embed_Y.bias
+S_loop = torch.zeros(Bsz, nq, nr)
+with torch.no_grad():
+    for b in range(Bsz):
+        for i in range(nq):
+            for j in range(nr):
+                l, r = L @ Xq[b, i] + bL, R @ Xr[b, j] + bR
+                k = i * nr + j                                   # index in the flattened grid
+                S_loop[b, i, j] = ((l @ r) / (l.norm() * r.norm()) - bn.running_mean[k]) / torch.sqrt(bn.running_var[k] + bn.eps) * bn.weight[k] + bn.bias[k]
+    loop_q = torch.stack([torch.stack([pw.margin_X.weight[0] @ S_loop[b, i] + pw.margin_X.bias[0] for i in range(nq)]) for b in range(Bsz)])
+    loop_r = torch.stack([torch.stack([pw.margin_Y.weight[0] @ S_loop[b, :, j] + pw.margin_Y.bias[0] for j in range(nr)]) for b in range(Bsz)])
+print("Pairwise vs loop  max diff: ψ_question", (psi_q - loop_q).abs().max().item(), "  ψ_image", (psi_r - loop_r).abs().max().item())
+
+ps = Pairwise(dr, nr, self_interaction=True).eval()           # self-interaction: one output, no margin_Y
+print("self-interaction output shape:", tuple(ps(Xr).shape))
+""")
+
+md(r"""
+**The factor graph.** One `Unary` per modality, one `Pairwise` per pair of modalities (keys `"i_j"`), optionally one self-interaction per modality (key `"self_i"`), and one bias-free `Linear(K → 1)` per modality to mix its $K$ potentials. Potential order per modality: unary, self, pairwise (as in the reference code).
+""")
+
+code(r"""
+class FGA(nn.Module):
+    def __init__(self, dims, sizes, use_pairwise=True, use_self=False, dropout=0.5):
+        super().__init__()
+        M = len(dims)
+        self.use_pairwise, self.use_self = use_pairwise, use_self
+        self.un_models = nn.ModuleList([Unary(d, dropout) for d in dims])
+        self.pp_models = nn.ModuleDict()
+        for i in range(M):
+            for j in range(i, M):
+                if i == j and use_self:
+                    self.pp_models[f"self_{i}"] = Pairwise(dims[i], sizes[i], self_interaction=True)
+                elif i != j and use_pairwise:
+                    self.pp_models[f"{i}_{j}"] = Pairwise(dims[i], sizes[i], dims[j], sizes[j])
+        K = 1 + use_self + use_pairwise * (M - 1)                      # potentials reaching each modality
+        self.reduce_potentials = nn.ModuleList([nn.Linear(K, 1, bias=False) for _ in dims])
+
+    def forward(self, *U):
+        # U: one (B, n_i, d_i) tensor per modality -> attended vectors [(B, d_i)], beliefs [(B, n_i)]
+        M = len(U)
+        pots = [[self.un_models[i](U[i])] for i in range(M)]
+        if self.use_self:
+            for i in range(M):
+                pots[i].append(self.pp_models[f"self_{i}"](U[i]))
+        if self.use_pairwise:
+            for i in range(M):
+                for j in range(i + 1, M):
+                    p_i, p_j = self.pp_models[f"{i}_{j}"](U[i], U[j])
+                    pots[i].append(p_i); pots[j].append(p_j)
+        att, beliefs = [], []
+        for i in range(M):
+            #>> stack the K potentials to (B, n_i, K); mix with reduce_potentials[i]; softmax over entities -> b (B, n_i); a = Σ_u b(u)·û -> (B, d_i)
+            stack = torch.stack(pots[i], -1)
+            b = F.softmax(self.reduce_potentials[i](stack).squeeze(-1), dim=-1)
+            a = (b.unsqueeze(-1) * U[i]).sum(1)
+            #<<
+            att.append(a); beliefs.append(b)
+        return att, beliefs
+""")
+
+code(r"""
+torch.manual_seed(0)
+fga = FGA([dq, dr], [nq, nr], use_self=True).eval()
+(a_q, a_r), (b_q, b_r) = fga(Xq, Xr)
+with torch.no_grad():                                          # image belief by hand: unary, self, pairwise-from-question
+    pots_r = [fga.un_models[1](Xr), fga.pp_models["self_1"](Xr), fga.pp_models["0_1"](Xq, Xr)[1]]
+    w = fga.reduce_potentials[1].weight[0]
+    logits = sum(w[k] * pots_r[k] for k in range(3))
+    b_hand = logits.exp() / logits.exp().sum(-1, keepdim=True)
+print("image belief vs by hand max diff:", (b_r - b_hand).abs().max().item(),
+      "  attended vector:", (a_r - (b_hand[..., None] * Xr).sum(1)).abs().max().item())
+print("beliefs sum to 1:", torch.allclose(b_q.sum(-1), torch.ones(Bsz)), torch.allclose(b_r.sum(-1), torch.ones(Bsz)))
+""")
+
+md(r"""
+**Optional check against the reference implementation.** Clone https://github.com/idansc/fga next to this notebook (or set `FGA_SRC` to its `src/` directory). The cell loads only the `fga.attention` subpackage, copies our weights into the reference modules, and compares outputs; without the repo it prints a note and moves on.
+""")
+
+code(r"""
+import importlib.util, os, sys
+ref = None
+try:
+    for root in [os.environ.get("FGA_SRC", ""), "fga/src"]:
+        init = Path(root) / "fga" / "attention" / "__init__.py"
+        if root and init.exists():
+            spec = importlib.util.spec_from_file_location("fga_ref", init, submodule_search_locations=[str(init.parent)])
+            ref = importlib.util.module_from_spec(spec); sys.modules["fga_ref"] = ref; spec.loader.exec_module(ref)
+            break
+except Exception as e:
+    print("reference import failed:", repr(e)); ref = None
+
+if ref is None:
+    print("reference repo not available")
+else:
+    r_un = ref.Unary(dr).eval(); r_un.load_state_dict(un.state_dict())
+    print("Unary    vs reference max diff:", (un(Xr) - r_un(Xr)).abs().max().item())
+    r_pw = ref.Pairwise(dq, nq, dr, nr); r_pw.load_state_dict(pw.state_dict())
+    pw.train(); r_pw.train()                                   # train mode: BatchNorm uses batch statistics
+    (p1, p2), (r1, r2) = pw(Xq, Xr), r_pw(Xq, Xr)
+    print("Pairwise vs reference max diff (train-mode BN):", max((p1 - r1).abs().max().item(), (p2 - r2).abs().max().item()))
+    pw.eval()
+    r_fga = ref.FactorGraphAttention(embed_dims=[dq, dr], num_entities=[nq, nr], use_self=True).eval()
+    r_fga.load_state_dict(fga.state_dict())
+    r_att, r_bel = r_fga(Xq, Xr, return_weights=True)
+    print("FGA      vs reference max diff: beliefs", max((b_q - r_bel[0]).abs().max().item(), (b_r - r_bel[1]).abs().max().item()),
+          "  attended", max((a_q - r_att[0]).abs().max().item(), (a_r - r_att[1]).abs().max().item()))
+""")
+
+md(r"""
+### A synthetic VQA task: does the image attention need the question?
+
+**Data.** An "image" is 9 regions on a 3×3 grid. Each region has one of 6 colors and one of 6 shapes; its feature is $e_\text{color}+e_\text{shape}+\varepsilon$, with fixed random $e\in\mathbb{R}^{32}$ (a frozen "detector") and noise $\varepsilon\sim\mathcal N(0,1.5^2 I)$. Two question templates of 5 words:
+- `what color is the <shape>`: exactly one region has that shape; the answer is its color;
+- `which shape is <color> ?`: exactly one region has that color; the answer is its shape.
+
+12 answer classes (6 within each question type, so chance is 1/6). Every image contains each of the other attributes several times, so the answer needs the one region the question names.
+
+**Model.** Learned word embeddings (32-d) for the question, the region features as they are, FGA over {question, image}, then an MLP on $[a_Q, a_I]$. Two attention variants:
+- (a) **unary only**: $b_I(u)\propto\exp(w\,\psi_I(u))$; the image belief cannot depend on the question;
+- (b) **FGA, unary + pairwise** question↔image: $b_I(u)\propto\exp(w_1\psi_I(u)+w_2\,\mu_{Q\to I}(u))$.
+
+20,000 training / 4,000 test questions, 12 epochs of Adam, 3 seeds per variant (a few seconds each on CPU).
+""")
+
+code(r"""
+COLORS = ["red", "green", "blue", "yellow", "purple", "orange"]
+SHAPES = ["circle", "square", "triangle", "star", "heart", "moon"]
+WORDS = ["what", "color", "is", "the", "which", "shape", "?"] + SHAPES + COLORS
+W2I = {w: i for i, w in enumerate(WORDS)}
+ANSWERS = COLORS + SHAPES
+DV, NREG, NQW, NOISE = 32, 9, 5, 1.5
+g = torch.Generator().manual_seed(123)
+E_COLOR, E_SHAPE = torch.randn(6, DV, generator=g), torch.randn(6, DV, generator=g)
+
+def make_vqa(n, seed):
+    rng = np.random.default_rng(seed)
+    col, shp = rng.integers(0, 6, (n, NREG)), rng.integers(0, 6, (n, NREG))
+    qtype, key, pos = rng.integers(0, 2, n), rng.integers(0, 6, n), rng.integers(0, NREG, n)
+    q, y = np.zeros((n, NQW), int), np.zeros(n, int)
+    for k in range(n):
+        attr = shp if qtype[k] == 0 else col                   # the attribute the question names
+        attr[k] = rng.choice([a for a in range(6) if a != key[k]], NREG)
+        attr[k, pos[k]] = key[k]                               # ... appears in exactly one region
+        if qtype[k] == 0:
+            q[k] = [W2I[w] for w in ["what", "color", "is", "the", SHAPES[key[k]]]]; y[k] = col[k, pos[k]]
+        else:
+            q[k] = [W2I[w] for w in ["which", "shape", "is", COLORS[key[k]], "?"]]; y[k] = 6 + shp[k, pos[k]]
+    col, shp = torch.tensor(col), torch.tensor(shp)
+    img = E_COLOR[col] + E_SHAPE[shp] + NOISE * torch.randn(n, NREG, DV, generator=torch.Generator().manual_seed(seed))
+    return dict(img=img, q=torch.tensor(q), y=torch.tensor(y), pos=torch.tensor(pos), col=col, shp=shp, qtype=torch.tensor(qtype))
+
+vqa_train, vqa_test = make_vqa(20000, 1), make_vqa(4000, 2)
+print("example:", " ".join(WORDS[i] for i in vqa_test["q"][0]), "->", ANSWERS[vqa_test["y"][0]])
+print("regions:", [f"{COLORS[c]} {SHAPES[s]}" for c, s in zip(vqa_test["col"][0].tolist(), vqa_test["shp"][0].tolist())])
+""")
+
+code(r"""
+class TinyVQA(nn.Module):
+    def __init__(self, use_pairwise):
+        super().__init__()
+        self.words = nn.Embedding(len(WORDS), DV)
+        self.att = FGA([DV, DV], [NQW, NREG], use_pairwise=use_pairwise, dropout=0.1)
+        self.head = nn.Sequential(nn.Linear(2 * DV, 64), nn.ReLU(), nn.Linear(64, len(ANSWERS)))
+
+    def forward(self, img, q):
+        (a_q, a_i), (b_q, b_i) = self.att(self.words(q), img)
+        return self.head(torch.cat([a_q, a_i], -1)), b_q, b_i
+
+def train_vqa(use_pairwise, seed, epochs=12, bs=128):
+    torch.manual_seed(seed)
+    model = TinyVQA(use_pairwise)
+    opt = torch.optim.Adam(model.parameters(), lr=3e-3)
+    d = vqa_train
+    for ep in range(epochs):
+        model.train()
+        for idx in torch.randperm(len(d["y"])).split(bs):
+            loss = F.cross_entropy(model(d["img"][idx], d["q"][idx])[0], d["y"][idx])
+            opt.zero_grad(); loss.backward(); opt.step()
+    model.eval()
+    with torch.no_grad():
+        logits, b_q, b_i = model(vqa_test["img"], vqa_test["q"])
+    acc = (logits.argmax(-1) == vqa_test["y"]).float().mean().item()
+    hit = (b_i.argmax(-1) == vqa_test["pos"]).float().mean().item()     # image belief peaks on the named region
+    return model, acc, hit
+
+t0 = time.time()
+vqa_models, vqa_res = {}, {}
+for name, use_pw in [("(a) unary only", False), ("(b) FGA unary + pairwise", True)]:
+    runs = [train_vqa(use_pw, seed) for seed in range(3)]
+    vqa_models[name] = runs[0][0]
+    vqa_res[name] = np.array([[r[1], r[2]] for r in runs])
+    acc, hit = vqa_res[name][:, 0], vqa_res[name][:, 1]
+    print(f"{name:26s} test accuracy {acc.mean():.3f} ± {acc.std():.3f}  (seeds: {', '.join(f'{a:.3f}' for a in acc)})"
+          f"   image belief peaks on the named region: {hit.mean():.3f}")
+# what the image alone gives: the most frequent color (shape) in the image, read from the true labels
+attr = torch.where(vqa_test["qtype"][:, None] == 0, vqa_test["col"], vqa_test["shp"])
+guess = F.one_hot(attr, 6).sum(1).argmax(1) + 6 * vqa_test["qtype"]
+print(f"chance 1/6 = {1/6:.3f}; 'most frequent attribute in the image' = {(guess == vqa_test['y']).float().mean().item():.3f}; "
+      f"region hit by chance 1/9 = {1/9:.3f}; {time.time() - t0:.0f}s")
+""")
+
+code(r"""
+show = [0, 1, 2, 3]
+d = vqa_test
+with torch.no_grad():
+    beliefs = {name: m(d["img"][show], d["q"][show]) for name, m in vqa_models.items()}
+fig, ax = plt.subplots(3, len(show), figsize=(3.6 * len(show), 9.4), gridspec_kw=dict(height_ratios=[1, 1, .55]))
+for c, k in enumerate(show):
+    words = [WORDS[i] for i in d["q"][k]]
+    for r, name in enumerate(vqa_models):
+        logits, b_q, b_i = beliefs[name]
+        im = ax[r, c].imshow(b_i[c].view(3, 3).numpy(), cmap="viridis", vmin=0, vmax=1)
+        for j in range(NREG):
+            ax[r, c].text(j % 3, j // 3, f"{COLORS[d['col'][k, j]]}\n{SHAPES[d['shp'][k, j]]}", ha="center", va="center", fontsize=7,
+                          color="black" if b_i[c, j] > .5 else "white", fontweight="bold" if j == d["pos"][k] else "normal")
+        ax[r, c].set_xticks([]); ax[r, c].set_yticks([])
+        ax[r, c].set_title(f"{name}\nanswer: {ANSWERS[logits[c].argmax()]}", fontsize=8)
+    ax[0, c].set_title(f"Q: {' '.join(words)}\n(true: {ANSWERS[d['y'][k]]})\n\n" + ax[0, c].get_title(), fontsize=8)
+    b_q = beliefs["(b) FGA unary + pairwise"][1][c]
+    ax[2, c].bar(range(NQW), b_q.numpy()); ax[2, c].set_xticks(range(NQW)); ax[2, c].set_xticklabels(words, fontsize=8)
+    ax[2, c].set_ylim(0, 1); ax[2, c].set_title("(b) question belief", fontsize=8)
+ax[0, 0].set_ylabel("image belief, (a)"); ax[1, 0].set_ylabel("image belief, (b)"); ax[2, 0].set_ylabel("belief")
+fig.colorbar(im, ax=ax[:2].ravel().tolist(), shrink=.6, label="attention on region")
+fig.suptitle("Image belief over the 3×3 regions (bold = the region the question names)", y=.995)
+plt.show()
+""")
+
+md(r"""
+<<SOLUTION>>
+- **(a) unary only**: 0.308 ± 0.005 test accuracy over 3 seeds. Its image belief peaks on the named region for 11.8% of questions, chance level (1/9): $\psi_I$ sees one region at a time, so the belief is the same whatever the question asks (top row, nearly uniform). The classifier is left with the pooled image, from which it can read how often each color and shape occurs. Guessing the most frequent color (shape) of the image, from the true labels, scores 0.345; (a) is just below that, about twice chance.
+- **(b) FGA, unary + pairwise**: 0.940 ± 0.006, and the image belief peaks on the named region for 96.4% of questions. The only addition is one learned word×region grid with its two marginals: the message $\mu_{Q\to I}$ makes the image attention a function of the question. The belief is not always peaked: in the second and fourth examples a third or more of it sits on a wrong region, and the answer is still right.
+- **The question belief of (b) is not on the keyword.** For `what color is the <shape>` it splits between `the` and the shape word; for `which shape is <color> ?` (third example) most of it is on `shape`. The keyword has already acted through the pairwise message to the image; what the classifier still needs from $a_Q$ is the question type (answer with a color or a shape), and `the` and `shape` each occur in one template only. Attention maps show what the downstream task uses, not what a human would highlight.
+<</SOLUTION>>
+✏️ In `Pairwise.forward`, replace the learned marginal of the question→image message by a max over the words, `psi_Y = S.max(dim=1).values` (keep `margin_X`), retrain variant (b) for 3 seeds and compare accuracy, region hit rate and the image beliefs. Then print `vqa_models["(b) FGA unary + pairwise"].att.pp_models["0_1"].margin_Y.weight` for the learned version: which word positions does the marginal weight? With a max, what must the projections $L$, $R$ do instead for the rows of `what`, `is`, `the`?
+""")
+
 # ---------------------------------------------------------------- GRU
 md(r"""
-## 6. If time: a GRU cell by hand
+## 7. If time: a GRU cell by hand
 
 PyTorch's GRU (gate order **r, z, n** in `weight_ih` / `weight_hh`):
 $$r=\sigma(W_{ir}x+b_{ir}+W_{hr}h+b_{hr}),\quad z=\sigma(W_{iz}x+b_{iz}+W_{hz}h+b_{hz}),$$
@@ -753,19 +1090,27 @@ md(r"""
 - An **autoregressive LM** is trained with teacher forcing (targets = inputs shifted by one) and sampled one token at a time; temperature trades diversity for coherence.
 - A **linear recurrence** (diagonal SSM, linear attention) has three equivalent forms: recurrent (constant memory per token), convolution (time-invariant only, FFT), and parallel scan (also for input-dependent, *selective* decay). Linear in $T$, but a fixed state cannot remember everything, hence attention + SSM **hybrids**.
 - **Gradients through time** shrink geometrically in a vanilla RNN; the LSTM cell path and slowly decaying SSM states carry them much further, and the forget-gate bias controls how far.
+- **Factor Graph Attention** gives every modality a belief from a learned, bias-free mix of potentials: unary $v^\top\mathrm{relu}(V\hat u)$ and cosine grids of learned projections, batch-normalized and collapsed by learned marginals. On the synthetic VQA task, unary-only attention cannot depend on the question (0.31 accuracy, chance 0.17); the question↔image pairwise factor finds the named region and reaches 0.94. The self-interaction grid is $QK^\top$; self-attention keeps it per row instead of marginalizing it.
 
 **Further watching:**
 - Stanford CS231n (2017), Lecture 10: Recurrent Neural Networks: https://www.youtube.com/watch?v=6niqTuYFZLQ
 - Karpathy, *makemore part 1* (bigram character LM): https://www.youtube.com/watch?v=PaCmpygFfXo
 - Karpathy, *makemore part 2* (MLP character LM): https://www.youtube.com/watch?v=TCH_1BHY58I
 - Karpathy, *Let's build the GPT Tokenizer* (section 2 follows it): https://www.youtube.com/watch?v=zduSFxRajkE
+
+**Further reading (section 6):**
+- Schwartz, Schwing, Hazan, *Factor Graph Attention*, CVPR 2019: https://arxiv.org/abs/1904.05880
+- Schwartz, Schwing, Hazan, *High-Order Attention Models for Visual Question Answering*, NeurIPS 2017: https://arxiv.org/abs/1711.04323
+- Code (PyTorch, `fga.attention`): https://github.com/idansc/fga
 """)
 
 for k, p in B.write(STEM).items():
     print(k, p)
 
-# recap slides, in teaching order: RNN, BPTT, LM, gradient flow, LSTM, then SSMs / linear attention / hybrids
+# recap slides, in teaching order: RNN, BPTT, LM, gradient flow, LSTM, then SSMs / linear attention / hybrids,
+# then FGA (p7: co-attention VQA, factorized belief, unary, learned interaction, message = learned marginal)
 print("recap", make_recap(STEM, [
     ("slides/lectures/p6.pdf", [10, 18, 74, 34, 39, 54, 58, 63, 64, 65]),
     ("slides/2026-updates/L8b_architectures_looped_2026.pdf", [49, 50, 51, 52]),
+    ("slides/lectures/p7.pdf", [37, 40, 42, 46, 48]),
 ]))
