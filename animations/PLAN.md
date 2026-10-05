@@ -43,6 +43,9 @@ built step by step, a bottom caption naming the current step, real numbers where
 | 5 | MemoryBudget | params, grads, Adam states, activations, KV cache as stacked bars while the model grows | new |
 | 5 | Quantization | float weights snap to an int8 grid; error vs bits | L11b |
 | 5 | Parallelism | data / tensor / pipeline / FSDP: how a model and a batch split across GPUs | new |
+| 5 | PowerLawFrontier | learning curves per model size; their lower envelope is a power law in C (Chinchilla fit) | L11 scaling |
+| 5 | IsoFLOPProfiles | fixed budget → loss valley over N; minima give N_opt ∝ C^0.45, derived on screen | L11 scaling |
+| 5 | TrainVsInferenceOptimal | same target loss: lifetime FLOPs 6ND + 2N·T; heavy serving favours small over-trained models (Llama 3 8B) | L11 scaling |
 | 6 | ContrastiveSphere | two views pulled together, negatives pushed apart on the unit sphere | p5 |
 | 6 | MAEMasking | 75% of patches hidden, the encoder sees the rest, the decoder reconstructs | p5 |
 | 6 | CollapseVsEMA | two identical nets collapse to a constant; an EMA teacher prevents it | p5 |
