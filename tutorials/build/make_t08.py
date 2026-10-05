@@ -173,6 +173,29 @@ print("∂/∂log σ²:", lv1.grad.numpy().round(3), " analytic σ²/2     =", (
 """)
 
 md(r"""
+**Past exam question (Moed B, 2026).** When sampling in a VAE we draw from the latent distribution using the mean $\mu$ and the variance $\sigma^2$. This sampling step is not differentiable, so backpropagation cannot be performed directly through it. How can this problem be overcome?
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.** The reparameterization trick: sample the noise from a fixed distribution and write $z$ as a deterministic, differentiable function of the parameters,
+$$z=\mu+\sigma\odot\epsilon,\qquad \epsilon\sim\mathcal N(0,I).$$
+The randomness is now in $\epsilon$, which does not depend on $\phi$, so $\partial z/\partial\mu=1$ and $\partial z/\partial\sigma=\epsilon$ are ordinary derivatives and the gradient of $\mathbb E_\epsilon[f(\mu+\sigma\epsilon)]$ is estimated by backpropagating through samples. The check below shows it in `torch.distributions`: `sample()` cuts the graph, `rsample()` is the reparameterized sample.
+<</SOLUTION>>
+""")
+
+code(r"""
+mu_r = torch.tensor([1.5], requires_grad=True); sig_r = torch.tensor([0.5], requires_grad=True)
+z_plain = Normal(mu_r, sig_r).sample((5,))
+print("sample():  requires_grad =", z_plain.requires_grad, " (no path from z back to μ, σ)")
+torch.manual_seed(0)
+z_rep = Normal(mu_r, sig_r).rsample((100_000,))
+z_rep.pow(2).mean().backward()                      # E[z²] = μ² + σ²  →  ∂/∂μ = 2μ = 3,  ∂/∂σ = 2σ = 1
+print("rsample(): ∂E[z²]/∂μ =", round(mu_r.grad.item(), 3), "(2μ = 3.0)   ∂E[z²]/∂σ =", round(sig_r.grad.item(), 3), "(2σ = 1.0)")
+""")
+
+md(r"""
 **Check 2: the negative ELBO** against `torch.distributions` (Bernoulli log-likelihood + KL).
 """)
 
@@ -216,6 +239,37 @@ plt.tight_layout(); plt.show()
 """)
 
 md(r"""
+**Past exam question (Moed C, 2026).** A VAE trains two components: an encoder $q_\phi(z|x)$ and a decoder $p_\theta(x|z)$. The objective the model maximizes is the Evidence Lower Bound (ELBO):
+$$\mathcal L_{\text{ELBO}}(x;\phi,\theta)=\mathbb E_{z\sim q_\phi(z|x)}\big[\log p_\theta(x|z)\big]-D_{KL}\big(q_\phi(z|x)\,\|\,p(z)\big),$$
+where $p(z)=\mathcal N(0,I)$ is the prior over the latent space. **Explain the role of each of the two terms**, and what would happen to the sample quality and to the latent space if either one were dropped.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.**
+- **Reconstruction** $\mathbb E_q[\log p_\theta(x|z)]$: the log-likelihood of $x$ under the decoder for codes drawn from the encoder (BCE here, MSE for a Gaussian decoder). It makes $z$ carry information about $x$ and trains the decoder to reproduce $x$ from it.
+- **KL to the prior**: penalizes posteriors far from $\mathcal N(0,I)$. It keeps every $q(z|x)$ near the origin with non-zero width, so the codes of all inputs overlap and fill the region where the prior puts mass: the latent space is continuous, and decoding $z\sim\mathcal N(0,I)$ lands on codes the decoder was trained on. For one input with $\mu=(1,0)$, $\sigma=(0.5,1)$: $\mathrm{KL}=\tfrac12\big[(1+0.25-\log0.25-1)+(0+1-0-1)\big]=0.818$ nats.
+- **Drop the KL**: a plain (noisy) autoencoder. Reconstructions get sharper, but the encoder places the codes anywhere, e.g. far from the origin with tiny $\sigma$, leaving gaps: samples from $\mathcal N(0,I)$ and interpolations fall in regions the decoder never saw and decode to garbage.
+- **Drop the reconstruction term**: the objective is $-\mathrm{KL}$ alone, minimized by $q(z|x)=\mathcal N(0,I)$ for every $x$. The code carries no information about the input (posterior collapse), and the decoder receives no training signal at all, so its samples are unrelated to the data. (The official solution says the samples would be "averaged and without detail"; that describes a decoder trained on uninformative codes, i.e. a decoder term that is still present but ignored. With the term dropped the decoder is not trained at all.)
+
+The check below computes the KL example and shows the effect of the KL term on the trained model: the codes of the test images have mean ≈ 0 and spread ≈ 1 per dimension, which is why decoding $z\sim\mathcal N(0,I)$ gives digits.
+<</SOLUTION>>
+""")
+
+code(r"""
+mu_k, sig_k = torch.tensor([1.0, 0.0]), torch.tensor([0.5, 1.0])
+#>> kl_k = closed-form KL( N(μ, diag σ²) || N(0, I) ) for this one input, summed over the 2 dims
+kl_k = 0.5 * (mu_k.pow(2) + sig_k.pow(2) - sig_k.pow(2).log() - 1).sum()
+#<<
+print(f"KL by hand {kl_k.item():.4f}   torch.distributions {kl_divergence(Normal(mu_k, sig_k), Normal(0., 1.)).sum().item():.4f}")
+with torch.no_grad():
+    z_test = reparameterize(*vae.encode(X_test))                  # one code per test image, (1000, 16)
+print(f"trained VAE, test codes z ~ q(z|x): mean over images per dim in [{z_test.mean(0).min():.2f}, {z_test.mean(0).max():.2f}], "
+      f"std per dim in [{z_test.std(0).min():.2f}, {z_test.std(0).max():.2f}]   (prior: 0 and 1)")
+""")
+
+md(r"""
 **Samples and interpolations.** Samples: decode $z\sim\mathcal N(0,I)$ (we show the Bernoulli means, $\sigma(\text{logits})$). Interpolation: encode two test digits, decode points on the segment between their means $\mu_1,\mu_2$.
 """)
 
@@ -239,6 +293,19 @@ md(r"""
 The samples are blurry: the Bernoulli/Gaussian decoder averages over all images consistent with $z$, and 6 epochs of an MLP is little. The interpolations change digit identity smoothly, with plausible intermediate strokes: the decoder is defined on the whole segment because the KL term keeps all codes near the origin.
 
 ✏️ Set the KL weight to 0 (a plain autoencoder) and re-train: reconstructions improve, but samples from $\mathcal N(0,I)$ become garbage. Why? Then try $\beta=5$ (a β-VAE): what happens to the KL, the reconstructions and the samples?
+""")
+
+md(r"""
+**Past exam question (Moed B, 2026).** In a VAE with an encoder and a decoder with trained parameters $\phi,\theta$, it is known that after training one can interpolate smoothly between two examples $x_1,x_2$:
+$$z_\alpha=(1-\alpha)z_1+\alpha z_2,\qquad z_i=\mathrm{Encoder}_\phi(x_i),\qquad \alpha\in[0,1],$$
+and then compute $\mathrm{Decoder}_\theta(z_\alpha)$, which gives a smooth transition between the images. A student tried the same interpolation in the latent space of a regular autoencoder but got samples that are invalid or do not look like data. **Explain why linear interpolation in the latent space of a regular autoencoder can fail, and how the structure of its latent space differs from a VAE's.** Refer to the additional term in the VAE loss.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.** A plain autoencoder is trained only to reconstruct, so nothing constrains where codes go: each training image maps to a point, the points can sit in separate clusters far apart, and the decoder is trained only at those points. The segment between $z_1$ and $z_2$ can pass through regions no training code ever occupied, where the decoder's output is arbitrary, hence invalid intermediate images. The VAE adds $D_{KL}(q_\phi(z|x)\,\|\,p(z))$ with $p(z)=\mathcal N(0,I)$: each input is encoded as a distribution with non-zero width, centred near the origin. During training the decoder sees random points around every code, and the posteriors of different inputs overlap, so the region between codes is covered and decodes to plausible images; the latent space is continuous, and a segment between two codes stays in the region the decoder was trained on (the interpolation rows above). The ✏️ above (KL weight 0) is the experiment that shows the difference.
+<</SOLUTION>>
 """)
 
 # ---------------------------------------------------------------- GAN

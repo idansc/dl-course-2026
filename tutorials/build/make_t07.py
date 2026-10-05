@@ -133,6 +133,42 @@ print(f"mine {mine.item():.5f}   CLIPModel {ref.item():.5f}   |diff| = {abs(mine
 """)
 
 md(r"""
+**Exam-style question (new).** A CLIP-style model is trained with the symmetric InfoNCE loss above at temperature $\tau=0.1$. In a batch of $N=2$ image–text pairs the cosine similarities are
+$$S=\begin{pmatrix}0.9 & 0.3\\ 0.5 & 0.7\end{pmatrix}\qquad(\text{row } i=\text{image } i,\ \text{column } j=\text{text } j;\ \text{matching pairs on the diagonal}).$$
+(a) Compute the loss. (b) What is the loss if both encoders collapse to a constant output (all $s_{ij}$ equal)? Does it depend on $\tau$? (c) Which term contributes most of the loss, and what does that say about the embeddings?
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.** For $N=2$ each cross-entropy is a two-way softmax: $-\log\frac{e^{a}}{e^{a}+e^{b}}=\log(1+e^{-(a-b)})$, with logits $s/\tau=10\,s$.
+- (a) Image → text (rows): image 1: $\log(1+e^{-(9-3)})=0.0025$; image 2: $\log(1+e^{-(7-5)})=0.1269$; mean 0.0647. Text → image (columns): text 1: $\log(1+e^{-(9-5)})=0.0181$; text 2: $\log(1+e^{-(7-3)})=0.0181$; mean 0.0181. $\mathcal L=\tfrac12(0.0647+0.0181)=0.0414$.
+- (b) All logits equal → each row and column is a uniform softmax over $N$ entries: $\mathcal L=\log N=\log 2=0.693$ for any $\tau$. This is the chance level; a collapsed encoder cannot go below it, so InfoNCE does not reward collapse (unlike a loss that only pulls positives together).
+- (c) Image 2 → text: 0.127 of the 0.166 sum of the four terms. Image 2 is only 0.2 more similar to its own caption than to text 1 ($0.7$ vs $0.5$), so the gradient mainly pushes image 2 away from text 1 and toward text 2. The asymmetry between rows and columns is why CLIP averages both directions.
+<</SOLUTION>>
+""")
+
+code(r"""
+S_ex = torch.tensor([[0.9, 0.3], [0.5, 0.7]])
+tau_ex = 0.1
+logits_ex, tgt = S_ex / tau_ex, torch.arange(2)
+#>> loss_i2t, loss_t2i = cross-entropy over the rows / over the columns of logits_ex (targets tgt); loss_ex = their mean
+loss_i2t, loss_t2i = F.cross_entropy(logits_ex, tgt), F.cross_entropy(logits_ex.T, tgt)
+loss_ex = (loss_i2t + loss_t2i) / 2
+#<<
+print("per-term (rows, then columns):", F.cross_entropy(logits_ex, tgt, reduction="none").numpy().round(4),
+      F.cross_entropy(logits_ex.T, tgt, reduction="none").numpy().round(4))
+print(f"(a) loss = {loss_ex.item():.4f}   (image→text {loss_i2t.item():.4f}, text→image {loss_t2i.item():.4f})")
+# the same number from clip_loss: 2-d unit vectors realizing the same cosines (Cholesky of the Gram matrix of [img; txt])
+G = torch.tensor([[1.0, 0.4, 0.9, 0.3], [0.4, 1.0, 0.5, 0.7], [0.9, 0.5, 1.0, 0.4], [0.3, 0.7, 0.4, 1.0]])  # img-img, txt-txt cosine 0.4
+ev, U = torch.linalg.eigh(G)                           # G is positive definite, so G = E E^T with E = U diag(sqrt(ev))
+emb_ex = U * ev.sqrt()                                 # 4 unit vectors in R^4 with exactly these cosines
+print(f"    clip_loss on vectors with these cosines: {clip_loss(emb_ex[:2], emb_ex[2:], torch.tensor(math.log(1 / tau_ex))).item():.4f}")
+for t_ in [0.01, 0.1, 1.0]:
+    print(f"(b) all similarities equal, tau={t_}: loss = {F.cross_entropy(torch.full((2, 2), 0.5) / t_, tgt).item():.4f}   log 2 = {math.log(2):.4f}")
+""")
+
+md(r"""
 **Zero-shot classification.** One text embedding per class is the classifier's weight vector. With several prompt templates, normalize each template's embedding, average over templates, and normalize again (prompt ensembling, as in the CLIP paper). We compare three prompt sets on 500 CIFAR-10 test images.
 """)
 
@@ -405,6 +441,31 @@ print(f"tiny VLM on {N_TE} test images: caption exact match {vlm_exact:.2f} (col
 
 md(r"""
 GPT-2 was not trained at all; only the 590k projector weights were (0.5% of the parameters). After 200 steps the frozen LM writes the exact caption for 91% of the test images and answers the color question correctly for 74%. The projector learned to write input embeddings ("soft prompts") that GPT-2 reads as a description of the image. This is the LLaVA stage-1 recipe (align the projector on captions, LLM frozen), at toy scale.
+""")
+
+md(r"""
+**Exam-style question (new).** A LLaVA-style VLM is built from a frozen CLIP ViT-B/32 vision encoder (768-d patch features), a frozen GPT-2 (124M parameters, embedding size 768), and a linear projector $H_v=WZ_v+b$ between them; only $W,b$ are trained, with the next-token loss on captions.
+(a) How many parameters are trained, and what fraction of the whole model is that? (b) What does the projector learn? (c) The VLM keeps confusing two colors. A student proposes a deeper projector (a 2-layer MLP). When can this help, and when can no projector help?
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.**
+- (a) $768\cdot768+768=590{,}592$ parameters, 0.47% of GPT-2's 124.4M (0.28% if the 87M-parameter vision tower is counted too).
+- (b) A map from the vision encoder's feature space into the LM's **input embedding space**: each visual token becomes a vector the frozen LM reads like the embedding of a word (a soft prompt) that describes the image. It learns the *alignment* between two fixed representation spaces, not new perception and not new language: what the image contains is decided by CLIP, and how to write about it by GPT-2.
+- (c) An MLP helps if the color information is in $Z_v$ but not linearly readable in a form the LM can use (LLaVA-1.5 moved to a 2-layer MLP for this reason). If the frozen encoder does not encode the distinction at all (e.g. its features are invariant to it, or it was lost by the 2×2 pooling), no function of $Z_v$ can recover it: $H_v$ is a function of $Z_v$ only. Then the encoder itself must change: unfreeze or fine-tune it, use more tokens / higher resolution, or a different encoder.
+<</SOLUTION>>
+""")
+
+code(r"""
+#>> n_proj = trainable (requires_grad) parameters of the projector; n_lm = parameters of GPT-2; n_vis_tower = of clip.vision_model
+n_proj = sum(p.numel() for p in projector.parameters() if p.requires_grad)
+n_lm = sum(p.numel() for p in lm.parameters())
+n_vis_tower = sum(p.numel() for p in clip.vision_model.parameters())
+#<<
+print(f"projector {n_proj:,} = 768·768 + 768 = {768 * 768 + 768:,};  GPT-2 {n_lm:,};  CLIP vision tower {n_vis_tower:,}")
+print(f"trainable fraction: {n_proj / (n_proj + n_lm):.2%} of projector + LM, {n_proj / (n_proj + n_lm + n_vis_tower):.2%} including the vision tower")
 """)
 
 md(r"""

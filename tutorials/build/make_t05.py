@@ -329,6 +329,63 @@ The training step reaches a few hundred GFLOP/s of model math, a small fraction 
 """)
 
 md(r"""
+**Past exam question (Moed C, 2026).** A single-head self-attention block acts on an input sequence $X\in\mathbb R^{T\times d}$ ($T$ = sequence length, $d$ = embedding dimension):
+$$\mathrm{Attn}(X)=\mathrm{softmax}\!\Big(\frac{QK^\top}{\sqrt{d_k}}\Big)V,\qquad Q=XW_Q,\ K=XW_K,\ V=XW_V.$$
+Explain why the memory complexity of computing the attention matrix $\mathrm{softmax}(QK^\top/\sqrt{d_k})$ is $\mathcal O(T^2)$, and why the compute complexity of the full attention operation is $\mathcal O(T^2 d)$. Break the cost down step by step: computing $QK^\top$, the softmax, and the multiplication by $V$.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.** $Q,K,V\in\mathbb R^{T\times d}$.
+- $QK^\top$: one dot product of length $d$ for each of the $T^2$ pairs of positions, $T^2 d$ multiply-adds ($2T^2d$ FLOPs). The result is a $T\times T$ matrix, so storing it takes $\mathcal O(T^2)$ memory.
+- Softmax: exp, row sum and division per entry, $\mathcal O(T^2)$ time; its output is again $T\times T$, $\mathcal O(T^2)$ memory.
+- $AV$: a $(T\times T)(T\times d)$ product, again $T^2 d$ multiply-adds.
+
+Total: $\mathcal O(T^2 d)$ time, $\mathcal O(T^2)$ memory for the attention matrix. (The official solution stops here. The projections $XW_Q, XW_K, XW_V$ add $3Td^2$ multiply-adds, so the whole block is $\mathcal O(T^2d + Td^2)$; the $T^2 d$ term dominates once $T > d$.) The check below counts the FLOPs with PyTorch and measures the bytes of $A$.
+<</SOLUTION>>
+""")
+
+code(r"""
+def attn_cost(T, d):
+    #>> flops_qk, flops_av = FLOPs (2 per multiply-add) of QK^T and of A·V; bytes_A = bytes of the T×T fp32 attention matrix A
+    flops_qk = 2 * T * T * d
+    flops_av = 2 * T * T * d
+    bytes_A = 4 * T * T
+    #<<
+    return flops_qk, flops_av, bytes_A
+
+d_h = 64
+for T_a in [256, 512, 1024]:
+    q_a, k_a, v_a = torch.randn(3, T_a, d_h).unbind(0)
+    with FlopCounterMode(display=False) as fc:
+        A_att = (q_a @ k_a.T / math.sqrt(d_h)).softmax(-1)
+        o_att = A_att @ v_a
+    f_qk, f_av, b_A = attn_cost(T_a, d_h)
+    print(f"T={T_a:5d}: FLOPs formula {f_qk + f_av:>11,}  counted {fc.get_total_flops():>11,}   "
+          f"A: formula {b_A/1e6:5.2f} MB  measured {A_att.nbytes/1e6:5.2f} MB")
+""")
+
+md(r"""
+<<SOLUTION>>
+Formula and counter agree exactly (the counter does not count the softmax, which is $\mathcal O(T^2)$, lower order). Doubling $T$ multiplies both the FLOPs and the bytes of $A$ by 4.
+
+<</SOLUTION>>
+**Past exam question (Moed C, 2026).** In a standard Transformer the memory complexity of the attention matrix is $\mathcal O(T^2)$ in the sequence length $T$. This becomes a critical bottleneck when training on **very long sequences** (long documents, video, or a long-context LLM with $T\sim10^4$ and more). **Propose one idea** (algorithmic or architectural) for reducing this complexity for long sequences, and **explain briefly** how it achieves it (in terms of the structure of the attention matrix, or in terms of the new complexity).
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer (any one, as in the official solution).**
+- **Sparse / sliding-window attention** (Longformer, BigBird): each token attends to a local window of $w$ tokens plus a few global tokens. The attention matrix is banded, $Tw$ entries instead of $T^2$: $\mathcal O(Twd)$ time, $\mathcal O(Tw)$ memory. For $T=16{,}384$, $w=512$: 32× fewer scored pairs.
+- **Linear attention / Performer**: replace $\mathrm{softmax}(QK^\top)$ by a kernel feature map $\phi(Q)\phi(K)^\top$ and compute $\phi(Q)\big(\phi(K)^\top V\big)$ right to left: $\mathcal O(Td^2)$, no $T\times T$ matrix.
+- **Linformer**: project $K,V$ along the sequence axis to $k\ll T$ rows: $\mathcal O(Tkd)$.
+- **FlashAttention** (lecture): exact attention with the same $\mathcal O(T^2d)$ FLOPs, computed tile by tile in on-chip SRAM with an online softmax, so the $T\times T$ matrix is never written to HBM. Extra memory drops from $\mathcal O(T^2)$ to $\mathcal O(T)$; compute does not.
+<</SOLUTION>>
+""")
+
+md(r"""
 ## 4. KV cache
 
 Without a cache, generating token $t+1$ runs the whole prefix of length $t$ through the model again: $O(t)$ work per token, $O(n^2)$ for $n$ tokens.

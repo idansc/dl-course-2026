@@ -215,6 +215,59 @@ print(f"chance level log(2N−1) = {math.log(11):.4f}")
 md(r"""
 For random pairs the loss is near the chance level $\log(2N-1)$; for matched pairs it drops well below it.
 
+**Past exam question (Moed B, 2026).** In contrastive learning with the InfoNCE loss, the quality and difficulty of the negative samples strongly affect the quality of the learned representations. **Hard negatives** are negatives whose representations the current model already places relatively close to the anchor $q$ (i.e. $\mathrm{sim}(q,k_i^-)$ is relatively high), although they are not truly positive. A researcher trains a contrastive model and finds that after a few epochs most of the random negatives in the batch are "easy", i.e. $\mathrm{sim}(q,k_i^-)\ll\mathrm{sim}(q,k^+)$, so the loss becomes very small and contributes a negligible gradient.
+**Explain theoretically why easy negatives give a small gradient (refer to the form of the softmax in InfoNCE), and propose *one* practical method for hard negative mining during training.** Explain why your method leads to better representations, and name a possible risk of extreme use of hard negatives.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.** With $s^+=\mathrm{sim}(q,k^+)$, $s_i^-=\mathrm{sim}(q,k_i^-)$:
+$$\mathcal L=-\log\frac{e^{s^+/\tau}}{e^{s^+/\tau}+\sum_j e^{s_j^-/\tau}},\qquad \frac{\partial\mathcal L}{\partial s_i^-}=\frac{p_i^-}{\tau},\quad p_i^-=\frac{e^{s_i^-/\tau}}{e^{s^+/\tau}+\sum_j e^{s_j^-/\tau}},\qquad \frac{\partial\mathcal L}{\partial s^+}=-\frac{1-p^+}{\tau}.$$
+Each negative is pushed away in proportion to its softmax probability. If $s_i^-\ll s^+$, the denominator is dominated by the positive, $p_i^-\approx e^{-(s^+-s_i^-)/\tau}\to0$, and $p^+\to1$: both the loss and every gradient vanish exponentially in the margin.
+
+*Method:* keep a large pool of candidate keys (the batch, or a memory queue as in MoCo), and for each anchor use the top-$k$ most similar keys as negatives (alternatives: synthesize harder negatives by mixing the hardest ones, MoCHi; or reweight negatives by similarity, Robinson et al. 2021). *Why it helps:* these negatives carry non-negligible $p_i^-$, hence gradient, and force the encoder to separate similar but different images: finer-grained features. *Risk:* the most similar "negatives" are often **false negatives** (another image of the same class or object); pushing them away removes exactly the semantic similarity we want, and with label-free data it cannot be detected directly. Extreme mining also makes training unstable.
+
+(Minor: the official solution describes MoCHi as mixing the input representations *and the positive*; MoCHi mixes the hardest negatives with each other and with the query, not with the positive.)
+<</SOLUTION>>
+""")
+
+code(r"""
+tau_q = 0.1
+s_pos = torch.tensor([0.9])
+cases = {"easy: 10 negatives at s=0.10        ": torch.full((10,), 0.1),
+         "hard: 1 negative at s=0.85, 9 at 0.10": torch.tensor([0.85] + [0.1] * 9)}
+for name, s_neg in cases.items():
+    s = torch.cat([s_pos, s_neg]).requires_grad_(True)
+    loss_q = -F.log_softmax(s / tau_q, 0)[0]
+    loss_q.backward()
+    #>> grad_neg = analytic gradient w.r.t. every negative similarity: p_i / tau with p = softmax(s / tau)
+    grad_neg = F.softmax(s.detach() / tau_q, 0)[1:] / tau_q
+    #<<
+    print(f"{name}: loss {loss_q.item():.4f}  dL/ds_neg max: autograd {s.grad[1:].max():.2e}, analytic {grad_neg.max():.2e} "
+          f"(diff {(s.grad[1:] - grad_neg).abs().max():.0e})   dL/ds_pos {s.grad[0]:.2e}")
+""")
+
+md(r"""
+<<SOLUTION>>
+With $\tau=0.1$, ten easy negatives give loss 0.003 and a gradient of $3\times10^{-3}$ on each; one hard negative at 0.85 raises the loss to 0.48 and receives a gradient of 3.8, about 1000× more, while the nine easy ones still get almost nothing.
+
+<</SOLUTION>>
+**Past exam question (Moed B, 2026).** MoCo was designed to address the need for a large batch size in contrastive learning. Which of the following statements correctly describe how MoCo obtains a large number of negative samples without increasing the batch size? (More than one answer may be correct.)
+1. MoCo replaces the InfoNCE loss with a loss that does not require negative samples.
+2. MoCo effectively increases the batch size by accumulating gradients over several training steps.
+3. MoCo uses a momentum encoder updated by an exponential moving average.
+4. MoCo uses hard negative mining to reduce the number of samples needed.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer: 3.** MoCo keeps a **queue** of keys from the last several batches (65,536 in the paper) and uses them as negatives; the keys are produced by a **momentum encoder**, $\theta_k\leftarrow m\theta_k+(1-m)\theta_q$ with $m=0.999$, so keys computed many steps apart come from nearly the same encoder and stay comparable. The queue supplies the number of negatives, the EMA makes the queue usable. (1) is false: MoCo uses InfoNCE. (2) is false: gradient accumulation does not add negatives, since each step's softmax still sees only its own batch. (4) is false: the queue negatives are random, not mined.
+<</SOLUTION>>
+""")
+
+md(r"""
 ### 2.3 Pretraining
 Encoder $f$ = `SmallCNN` (64-d), projection head $g$ = MLP 64→128→64, Adam, $\tau=0.5$, batch 256, 12 epochs on 5000 images (228 steps). The paper uses LARS, batch 4096 and 800 epochs on ImageNet; this is a toy version of the same objective.
 """)
@@ -442,6 +495,21 @@ class MAEFeatures(nn.Module):
     def forward(self, x): return self.mae.encode(norm(x))[0].mean(1)
 acc_mae, _ = linear_probe(extract(MAEFeatures(mae), X_probe), y_probe, extract(MAEFeatures(mae), X_te), y_te)
 print(f"MAE features, linear probe test accuracy: {acc_mae:.3f}")
+""")
+
+md(r"""
+**Past exam question (Moed B, 2026).** A student trained a Masked Auto-Encoder (MAE) but found that the learned representations are not useful for downstream tasks. What is an especially important condition for good representations in MAE, and what would you suggest the student change or check in the training process?
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer.** The key condition is a **high mask ratio** (≈75%, as in the paper and in section 3), so that reconstruction is a hard task. Images are spatially redundant: with few masked patches, a missing patch can be filled in by interpolating its visible neighbours, and the encoder never needs semantic features. Things to check:
+- the mask ratio (raise it to ~75%) and that patches are masked at random over the whole image, not in a fixed pattern;
+- the loss is computed **on the masked patches only** and the encoder sees **only the visible patches** (no mask tokens in the encoder);
+- downstream uses the **encoder**, with the decoder thrown away; the decoder's tokens are specialised for pixels;
+- training length and data: MAE needs long pretraining; also check the evaluation protocol: MAE features are weak under a linear probe and strong after fine-tuning (section 5 below and the MAE paper), so a linear probe alone can understate them.
+<</SOLUTION>>
 """)
 
 md(r"""
@@ -791,6 +859,21 @@ md(r"""
 - **Sharpening only:** both entropies fall steadily, to 1.55 (per image) and 1.91 (batch mean) nats after 150 steps and still falling. The batch-mean distribution is concentrating on a few outputs shared by all images: collapse to (almost) one dimension.
 - **Centering only:** both entropies sit at $\log K = 4.16$ from the start (the orange curve is under the dashed line): every image gets the uniform distribution, and the loss carries no information.
 - **Both:** batch-mean entropy 4.12 ≈ $\log K$ (all outputs used), per-image entropy 3.66, below $\log K$. At this scale the teacher is only mildly sharp; DINO trains for hundreds of epochs and warms $\tau_t$ up from 0.04 to 0.07.
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026).** DINO is a visual self-supervised method that uses two networks with the same architecture: a student $f_s$ and a teacher $f_t$. They receive two different views (augmentations) of the same image, and the goal is for $f_s$ to learn to match its output to $f_t$'s. In DINO $f_t$ is not trained directly by backpropagation; instead it is an Exponential Moving Average (EMA) of the student's weights:
+$$\theta_t\leftarrow m\,\theta_t+(1-m)\,\theta_s,\qquad m\in[0,1).$$
+**Explain why, without this mechanism (or a similar one), training a self-supervised network with two identical networks may collapse (representation collapse), i.e. the networks learn a constant output that does not depend on the input.** Refer to the loss function and to how the EMA prevents the collapse.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer (official solution).** The loss is the cross-entropy $\mathcal L=-\sum_k p_t^{(k)}\log p_s^{(k)}$ between the teacher's and the student's distributions on two views. It only asks the two outputs to agree, and a constant output $f_s(x)=f_t(x)=c$ for every $x$ agrees perfectly: minimal loss, useless features. If both networks were trained by gradient descent on this symmetric loss, each could move toward the other and they would reach the constant solution quickly. With the EMA the teacher receives no gradient and changes slowly: it is a stable, slowly moving target (a temporal ensemble of past students), the student cannot pull the teacher along with it, and the asymmetry slows the drift to the trivial solution. BYOL uses the same mechanism.
+
+**Where we disagree with the official solution.** The EMA is not what prevents collapse in DINO; centering and sharpening do. All three runs in this section use the EMA teacher ($m=0.996$), and two of them collapse: sharpening only (one-dimension collapse, batch-mean entropy falling) and centering only (uniform output, both entropies at $\log K$). Only centering + sharpening stays healthy. The DINO paper reports the same (Caron et al. 2021, Sec. 5.3 / Fig. 7): with a momentum teacher but without centering or without sharpening, training collapses. The official solution mentions centering and sharpening as a "complementary note"; they are the anti-collapse mechanism, and the EMA's role is to make the teacher a better, stabler target (with a teacher that simply copies the student, $m=0$, the paper reports that training does not converge).
+<</SOLUTION>>
 """)
 
 md(r"""
