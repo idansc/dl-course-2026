@@ -51,7 +51,7 @@ class CLIPMatrix(Scene):
         title(self, "CLIP: contrastive image–text pretraining", "real CLIP ViT-B/32 embeddings, 5 photos × 5 captions")
         short = ["wrist watch", "sunglasses", "handbag", "running shoe", "t-shirt"]
         cell = 0.8
-        org = np.array([-2.9, 1.15, 0])                 # centre of cell (0, 0)
+        org = np.array([-2.9, 0.85, 0])                 # centre of cell (0, 0)
         cpos = lambda i, j: org + np.array([j * cell, -i * cell, 0])
         imgs = Group(*[img_mob(Image.open(DATA / f"w07_img{i}.png"), cell * 0.92).move_to(cpos(i, 0) + np.array([-1.35, 0, 0]))
                        for i in range(n)])
@@ -112,8 +112,8 @@ class CLIPMatrix(Scene):
 
         # zero-shot
         self.play(*[FadeOut(m) for m in [*imgs, ilab, tlab, caps, cells, diag, f1, f2, f3, sl, capnote]])
-        q = img_mob(Image.open(DATA / "w07_img5.png"), 2.4).move_to([-4.6, -0.2, 0])
-        ql = Text("a new photo\n(not one of the 5 pairs)", font_size=17, color=MUTED, line_spacing=0.8).next_to(q, DOWN, buff=0.15)
+        q = img_mob(Image.open(DATA / "w07_img5.png"), 2.0).move_to([-5.7, 0.0, 0])
+        ql = Text("a new photo\n(not one of the 5 pairs)", font_size=15, color=MUTED, line_spacing=0.8).next_to(q, DOWN, buff=0.15)
         cos = np.array(d["zs_cos"])
         prob = softmax(scale * cos)
         prompts = d["zs_prompts"]
@@ -188,7 +188,7 @@ class VLMRecipe(Scene):
         self.wait(0.8)
 
         # the interleaved sequence
-        sy = -1.15
+        sy = -0.9
         words = ["USER:"] + ["img"] * 6 + ["What", "is", "she", "wearing", "?", "ASSISTANT:"]
         seq = VGroup()
         for w in words:
@@ -206,7 +206,7 @@ class VLMRecipe(Scene):
         self.play(Create(a3), LaggedStart(*[FadeIn(s, shift=0.1 * UP) for s in seq], lag_ratio=0.05), FadeIn(dots), run_time=1.6)
         self.wait(0.6)
 
-        llm = box("LLM  (Vicuna-7B)", seq.width + 0.3, 0.75, GREEN_, size=22).next_to(seq, DOWN, buff=0.22)
+        llm = box("LLM  (Vicuna-7B)", seq.width + 0.3, 0.75, GREEN_, size=22).next_to(seq, DOWN, buff=0.34)
         llm[1].move_to(llm[0])
         cap = swap_caption(self, cap, "5. the LLM attends over all of it and writes the answer token by token", color=GREEN_)
         self.play(FadeIn(llm))
@@ -226,7 +226,7 @@ class VLMRecipe(Scene):
         cap = swap_caption(self, cap, "training: stage 1 fits only the projector, stage 2 also tunes the LLM", color=PURPLE_)
         st = VGroup(Text("stage 1: 558k image–caption pairs, projector only", font_size=18, color=PURPLE_),
                     Text("stage 2: 665k visual instructions, projector + LLM", font_size=18, color=GREEN_)
-                    ).arrange(DOWN, aligned_edge=LEFT, buff=0.1).next_to(llm, DOWN, buff=0.18).align_to(llm, LEFT)
+                    ).arrange(DOWN, aligned_edge=LEFT, buff=0.1).next_to(llm, DOWN, buff=0.12).align_to(llm, LEFT)
         self.play(FadeIn(st))
         self.wait(3)
 
