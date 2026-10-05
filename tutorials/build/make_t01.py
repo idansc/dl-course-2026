@@ -1,14 +1,23 @@
 """Builds T01_neurons_to_backprop.ipynb (Tutorial 1, Deep Learning 89-6877, Fall 2026)."""
 from nbkit import Builder
+from recap import make_recap
+
+make_recap("T01_neurons_to_backprop", [
+    ("slides/lectures/p1.pdf", [17, 18, 29, 30, 32]),
+    ("slides/lectures/p3.pdf", [11, 19, 25, 30, 35, 38, 39, 44, 49]),
+])
 
 B = Builder()
 md, code = B.md, B.code
 
 md(r"""
 # Tutorial 1: from a neuron to backprop, built by hand
-**Deep Learning 89-6877, Fall 2026.** TA: Tal Fikus.
+**Deep Learning 89-6877, Fall 2026.** TA: Tal Fiskus.
 
-Plan for today (≈ 60 min):
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/idansc/dl-course-2026/blob/main/tutorials/T01_neurons_to_backprop.ipynb) · [Recap slides](https://github.com/idansc/dl-course-2026/blob/main/tutorials/recap/T01_neurons_to_backprop_recap.pdf)
+
+Plan for today (≈ 75 min):
+0. Recap slides (15 min)
 1. Lecture recap: neuron, perceptron, XOR, MLP, chain rule (10 min)
 2. A perceptron, and why it fails on XOR (5 min)
 3. A scalar autograd engine in ~40 lines (20 min)

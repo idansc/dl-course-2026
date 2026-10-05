@@ -1,6 +1,6 @@
 # Deep Learning 89-6877, Bar-Ilan University, Fall 2026
 
-Lecturer: Idan Schwartz · TA: Tal Fikus
+Lecturer: Idan Schwartz · TA: Tal Fiskus
 
 Slides, tutorial notebooks and the weekly plan. Exam 75%, homework 25% (HW1–HW4).
 
