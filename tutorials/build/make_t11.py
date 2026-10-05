@@ -391,6 +391,55 @@ print("at policy = reference the loss is log 2 =", round(math.log(2), 6),
       "->", round(dpo_loss(*[torch.tensor([-3.])] * 4)[0].item(), 6))
 """)
 
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+In **Direct Preference Optimization (DPO)**, a language model $\pi_\theta$ is trained on pairs of answers $(y_w, y_l)$ to a prompt $x$, where $y_w$ is preferred by humans over $y_l$. The loss is
+$$\mathcal{L}_{\text{DPO}} = -\mathbb{E}_{(x, y_w, y_l)}\Big[\log \sigma\Big(\beta \log \frac{\pi_\theta(y_w|x)}{\pi_{\text{ref}}(y_w|x)} - \beta \log \frac{\pi_\theta(y_l|x)}{\pi_{\text{ref}}(y_l|x)}\Big)\Big],$$
+where $\pi_{\text{ref}}$ is a fixed reference model (usually the model after SFT) and $\beta$ is a temperature parameter.
+
+Which of the following statements about DPO is **correct**? **(More than one answer may be correct.)**
+1. DPO trains the model directly from human preference pairs, without an RL algorithm (such as PPO), by analytically deriving an equivalent loss function.
+2. A high value of $\beta$ constrains $\pi_\theta$ to stay closer to $\pi_{\text{ref}}$, in a role similar to the KL-regularization term in traditional RLHF.
+3. DPO requires training a separate, explicit reward model before the optimization stage of $\pi_\theta$.
+4. DPO is suitable only for classification tasks and cannot be used for autoregressive generative models.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+
+**Numeric check of statement 2.** Two possible answers, $\pi_{\text{ref}} = (0.5, 0.5)$. Preference data follow Bradley-Terry with rewards $r = (1, 0)$: answer 1 wins a comparison with probability $p = \sigma(1) = 0.73$. Minimize the expected DPO loss, $p\,\mathcal L(y_1 \succ y_2) + (1-p)\,\mathcal L(y_2 \succ y_1)$, over the policy's two logits for several $\beta$, using `dpo_loss` from above. RLHF's KL-regularized optimum is $\pi^* \propto \pi_{\text{ref}}\,e^{r/\beta}$, i.e. $\pi^*(y_1) = \sigma(1/\beta)$ here.
+""")
+
+code(r"""
+p_win = 1 / (1 + math.exp(-1.0))                    # sigma(r_1 - r_2) with r = (1, 0)
+ref_lp = torch.log(torch.tensor([0.5, 0.5]))
+print(" beta   pi(y1) DPO   pi(y1) RLHF optimum   KL(pi || pi_ref)")
+for beta in [0.25, 0.5, 1.0, 2.0, 4.0]:
+    logits = torch.zeros(2, requires_grad=True)
+    opt_toy = torch.optim.Adam([logits], lr=0.05)
+    for _ in range(600):
+        lp = torch.log_softmax(logits, 0)
+        #>> expected DPO loss: p_win × dpo_loss(y1 wins) + (1 − p_win) × dpo_loss(y2 wins), each pair as tensors of shape (1,)
+        loss_w, _, _ = dpo_loss(lp[0:1], lp[1:2], ref_lp[0:1], ref_lp[1:2], beta)
+        loss_l, _, _ = dpo_loss(lp[1:2], lp[0:1], ref_lp[1:2], ref_lp[0:1], beta)
+        loss = p_win * loss_w + (1 - p_win) * loss_l
+        #<<
+        opt_toy.zero_grad(); loss.backward(); opt_toy.step()
+    pi = torch.softmax(logits.detach(), 0)
+    kl = (pi * (pi.log() - ref_lp)).sum().item()
+    print(f"{beta:5.2f}   {pi[0]:.4f}        {1 / (1 + math.exp(-1 / beta)):.4f}               {kl:.4f}")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer: 1 and 2** (as in the official solution).
+1. True. The KL-regularized RLHF objective has a closed-form optimum, $\pi^*(y|x) \propto \pi_{\text{ref}}(y|x)\,e^{r(x,y)/\beta}$. Solving it for $r$ and substituting into the Bradley-Terry likelihood gives a supervised loss on $\pi_\theta$: no PPO, no sampling during training.
+2. True. The table shows it: the DPO minimizer equals the RLHF optimum $\sigma(1/\beta)$ for every $\beta$, and its KL to $\pi_{\text{ref}}$ falls from 0.60 at $\beta=0.25$ to 0.0078 at $\beta=4$. $\beta$ is exactly the KL coefficient of the RLHF objective DPO is derived from.
+3. False. The reward is implicit, $\hat r = \beta\log\frac{\pi_\theta}{\pi_{\text{ref}}}$; `dpo_loss` takes only four log-probs. Not needing a reward model is DPO's main practical advantage.
+4. False. $\pi_\theta(y|x)$ is the product of the token probabilities of an autoregressive LM; this notebook trains a causal LM with it, as Llama 3, Mistral/Zephyr and Tülu did.
+<</SOLUTION>>
+""")
+
 code(r"""
 def seq_logprob(model, prompts, responses):
     ids, att, lab = build_sft_batch(prompts, responses)
@@ -553,6 +602,44 @@ print(f"GRPO loss: ours {grpo_loss(lp_t, old_t, ref_t, adv_t, mask_t).item():.6f
 """)
 
 md(r"""
+**Past exam question (Moed C, 2026)**
+
+**Group Relative Policy Optimization (GRPO)** is used to train reasoning models (such as DeepSeek-R1). For each prompt, a group of $G$ answers $\{y_1, \ldots, y_G\}$ is sampled, rewards $\{r_1, \ldots, r_G\}$ are obtained, and a relative advantage is computed for each sample:
+$$A_i = \frac{r_i - \mathrm{mean}(r)}{\mathrm{std}(r)}.$$
+**Explain why normalizing by $\mathrm{std}(r)$ can be problematic for *very hard* questions, where almost all samples fail** ($r_i \approx 0$ for almost all $i$). Propose a simple fix.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+
+Compute it with `group_advantages` from above (it adds $\epsilon = 10^{-4}$ to the std) on four very hard groups: all 8 answers fail; 1 of 8 succeeds; 1 of 16 succeeds; and all 8 fail but one gets a tiny partial reward of 0.01 (e.g. a format bonus or a noisy judge). Compare with the advantage without the std, $r_i - \mathrm{mean}(r)$.
+""")
+
+code(r"""
+groups = {"all 8 fail": torch.zeros(8),
+          "1 of 8 succeeds": torch.tensor([1.] + [0.] * 7),
+          "1 of 16 succeeds": torch.tensor([1.] + [0.] * 15),
+          "8 fail, one gets 0.01": torch.tensor([0.01] + [0.] * 7)}
+for name, r in groups.items():
+    #>> A = group_advantages(r, G=len(r)); A_nostd = r − r.mean(); A_noeps = (r − mean) / std without the epsilon
+    A = group_advantages(r, len(r))
+    A_nostd = r - r.mean()
+    A_noeps = (r - r.mean()) / r.std()
+    #<<
+    print(f"{name:22s} with std: first {A[0].item():6.2f}, others {A[1].item():6.2f}   without eps: first {A_noeps[0].item():6.2f}"
+          f"   without std (r − mean): first {A_nostd[0].item():6.3f}, others {A_nostd[1].item():6.3f}")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer** (the solution files have no official solution for this question; this is ours).
+- **All answers fail:** $\mathrm{std}(r)=0$ and $A_i = 0/0$ (NaN without the $\epsilon$, printed above); with the $\epsilon$, $A_i=0$. The question costs $G$ rollouts and gives no gradient.
+- **Almost all fail:** dividing by a small std **amplifies** the rare success. One success in 8 gets $A=+2.47$, one in 16 gets $+3.75$: the rarer the success, the larger its push, so the update is dominated by a few hard (or, symmetrically, very easy) questions, and a lucky or spuriously-rewarded answer (right answer, wrong reasoning) is reinforced the most. This is the question-level difficulty bias analyzed by Liu et al. (2025, Dr. GRPO).
+- **Std normalization is scale-free:** a reward difference of 0.01 (last row) gets almost the same advantage as a real success: $+2.41$ ($+2.47$ without the $\epsilon$, exactly as for a success). On hard questions where the only variation is reward noise or a small partial credit, GRPO turns noise into a full-size learning signal.
+- **Fix:** drop the division, $A_i = r_i - \mathrm{mean}(r)$ (Dr. GRPO): then a group whose rewards barely differ gives advantages near 0 (0.009 in the last row) and one success in 16 gets 0.94, not 3.75. Alternatives: divide by the std of the whole batch instead of the group, or a floor $\max(\mathrm{std}, c)$; and skip groups with identical rewards, resampling new prompts instead (DAPO's dynamic sampling).
+<</SOLUTION>>
+""")
+
+md(r"""
 **Rollouts.** `rollout` samples $G$ answers per prompt at temperature 1 and builds the tensors the loss needs: the full sequences, an attention mask that stops after the first end token, and labels that are −100 on the prompt and after the end.
 """)
 
@@ -666,7 +753,25 @@ pass@1 rose by 0.27 (0.38 → 0.65), pass@8 by 0.16 (0.70 → 0.86). Most of the
 
 Majority vote (maj@8) stays within a few points of pass@1 (0.39 vs 0.38 and 0.64 vs 0.65 here; a CPU run gave 0.47 vs 0.43 and 0.72 vs 0.65). A vote returns the model's most likely answer, so it fixes errors caused by sampling noise, not errors the model makes systematically; this model's arithmetic mistakes are mostly of the second kind.
 <</SOLUTION>>
+""")
 
+md(r"""
+**Past exam question (Moed B, 2026)**
+
+What are the main difficulties in training **reasoning** models with standard **supervised learning**? Explain how training with **Reinforcement Learning (RL)** helps to deal with these difficulties. Refer to the type of **reward** commonly used in training such models.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**Answer** (following the official solution).
+- **Supervised learning is hard for reasoning:** (i) one problem has many valid reasoning paths, and SFT rewards copying one particular written path token by token, not reaching the right answer; (ii) full, high-quality reasoning traces are expensive to obtain at scale; (iii) imitation is bounded by the demonstrations: it does not encourage *discovering* better solution strategies, and the model never learns from its own mistakes, since it is trained only on states the demonstrator visited.
+- **RL** rewards the *outcome* of the model's own attempts, not agreement with a fixed path. The model explores different solutions; those that reach a correct answer are reinforced, wrong ones pushed down (section 5).
+- **Reward:** a **verifiable reward**, computed by a program: the final answer matches the reference for math, the unit tests pass for code (RLVR). It needs no human labels per sample and no trace annotations, and it is hard to fool if the checker is exact; section 6 shows what happens when the checker is not.
+- In this notebook: SFT on demonstrations (section 3) taught the answer format, but not two-digit addition; GRPO with the verifier then raised held-out accuracy, mostly by making answers the model could already sometimes produce more likely (pass@1 vs pass@8 above).
+<</SOLUTION>>
+""")
+
+md(r"""
 ✏️ Re-run `grpo_train(verifier, lr=1e-3)` with the `clip_grad_norm_` line removed and watch for the collapse. Then PPO-style reuse: take 2 gradient steps on each rollout batch (compute `old_lp` once, before the first step, with `torch.no_grad()`). Print the fraction of tokens where the ratio is clipped in the second step.
 
 *Further reading:* Stanford CME 295 (2025), [Lecture 6: reasoning and GRPO](https://cme295.stanford.edu/slides/fall25-cme295-lecture6.pdf); GRPO for image generation (Flow-GRPO), Stanford CME 296 (2026), [Lecture 6](https://cme296.stanford.edu/slides/spring26-cme296-lecture6.pdf).

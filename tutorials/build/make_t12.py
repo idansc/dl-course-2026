@@ -238,6 +238,49 @@ On SQuAD, BM25 beats the dense MiniLM encoder at top-1 (0.80 vs 0.74), and dense
 """)
 
 md(r"""
+**Exam-style question (new)**
+
+A corpus has four passages:
+- $d_0$: *Fixing a broken automobile usually costs a few hundred dollars at a garage.*
+- $d_1$: *How much does it weigh? The car in this museum photo is a red 1950s model.*
+- $d_2$: *Printer error E4021 means the fuser unit has overheated.*
+- $d_3$: *Printer error E4012 means the printer is out of paper.*
+
+Two queries: $q_A$ = *How much does it cost to repair a car?* (relevant: $d_0$) and $q_B$ = *What does printer error E4021 mean?* (relevant: $d_2$).
+- (a) For each query, which passage does **BM25** rank first, and which does a **dense bi-encoder** (mean-pooled MiniLM, cosine) rank first? Explain each failure from how the score is computed. (No computation needed for the dense model; for BM25 reason with shared words and IDF.)
+- (b) Name one kind of query where sparse retrieval is the safer choice and one where dense is, and one way to get both.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+mini = ["Fixing a broken automobile usually costs a few hundred dollars at a garage.",
+        "How much does it weigh? The car in this museum photo is a red 1950s model.",
+        "Printer error E4021 means the fuser unit has overheated.",
+        "Printer error E4012 means the printer is out of paper."]
+mini_q = ["How much does it cost to repair a car?", "What does printer error E4021 mean?"]
+#>> S_b: BM25 scores (2 × 4) with a BM25 index built on the four passages; S_d: cosine similarities (2 × 4) with embed()
+bm_mini = BM25([tokenize(d) for d in mini])
+S_b = np.stack([bm_mini.scores(tokenize(q)) for q in mini_q])
+S_d = (embed(mini_q) @ embed(mini).T).numpy()
+#<<
+for i, q in enumerate(mini_q):
+    print(q)
+    print("   BM25 :", np.round(S_b[i], 2), "-> top d%d" % S_b[i].argmax())
+    print("   dense:", np.round(S_d[i], 3), "-> top d%d" % S_d[i].argmax())
+print("MiniLM word pieces for the two codes:", enc_tok.tokenize("E4021 E4012"))
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer.**
+- (a) $q_A$: **BM25 ranks $d_1$ first** (wrong) and the dense model $d_0$ (right). BM25 only counts exact words: $d_1$ shares *how, much, does, it, car* with the query, $d_0$ shares only *a*. "repair/fixing", "car/automobile", "cost/costs" are different tokens (no stemming), so the relevant passage scores almost nothing. The dense encoder maps paraphrases to nearby vectors. $q_B$: **BM25 ranks $d_2$ first** (right) and the **dense model $d_3$** (wrong). The only discriminative token is the rare code `e4021`, which appears in one passage and so gets a high IDF; everything else (*printer, error, means*) is shared by $d_2$ and $d_3$. The dense model splits the code into the word pieces printed above (`e`, `##40`, `##21` vs `##12`), and after mean pooling over the sentence the two codes differ by one piece among ~12 tokens; $d_3$ also shares the query's frame ("what … means") and wins narrowly.
+- (b) Sparse is safer for exact identifiers: error codes, product numbers, names, rare terms. Dense is better for paraphrased or conceptual questions where the user does not know the document's words. Get both with **hybrid** retrieval: run both and fuse the ranked lists (reciprocal rank fusion, section 7), or a learned sparse model (SPLADE), or rerank the union of both candidate lists with a cross-encoder.
+<</SOLUTION>>
+""")
+
+md(r"""
 ## 3. Late interaction: MaxSim
 
 One vector per passage compresses ~130 tokens into 384 numbers. ColBERT (Khattab & Zaharia, 2020) keeps all token vectors and scores
@@ -637,6 +680,42 @@ row = correct[int(np.argmin(np.abs(correct.sum(1) - 5)))]          # a problem w
 for k in (1, 3, 5):
     brute = np.mean([row[list(s)].any() for s in itertools.combinations(range(n), k)])
     print(f"k={k}: formula {pass_at_k(n, row.sum(), k):.4f}   enumeration {brute:.4f}")
+""")
+
+md(r"""
+**Exam-style question (new)**
+
+A code model generated $n = 20$ samples for one problem; $c = 4$ of them pass the unit tests.
+- (a) Give the unbiased estimates of pass@1 and pass@5.
+- (b) A student estimates pass@5 as $1-(1-c/n)^5$. Compute it. Which of the two estimates is unbiased for the model's true pass@5, $1-(1-p)^5$ with $p$ its per-sample success rate, and in which direction is the other one biased?
+- (c) A harness draws 5 samples and returns the first one that passes the tests (if any). With these 20 samples as the pool, what is its accuracy on this problem? What if it can only use majority vote and the 16 failing samples all return the same wrong output?
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+n_s, c_s, k_s = 20, 4, 5
+#>> (a) unbiased pass@1 and pass@5 with pass_at_k; (b) the plug-in 1 − (1 − c/n)^k
+p1, p5 = pass_at_k(n_s, c_s, 1), pass_at_k(n_s, c_s, k_s)
+plug_in = 1 - (1 - c_s / n_s) ** k_s
+#<<
+print(f"(a) pass@1 = {p1:.4f}   pass@5 = {p5:.4f}      (b) plug-in = {plug_in:.4f}")
+
+# (b) bias, by simulation: a model with true p = 0.2; draw n = 20 samples many times, average each estimator
+rng_pk = np.random.default_rng(0)
+cs = rng_pk.binomial(n_s, 0.2, size=200_000)
+print(f"true pass@5 = {1 - 0.8 ** 5:.4f};  mean of unbiased estimator = {np.mean([pass_at_k(n_s, c, k_s) for c in cs]):.4f};  "
+      f"mean of plug-in = {np.mean(1 - (1 - cs / n_s) ** k_s):.4f}")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer.**
+- (a) pass@1 $= c/n = 0.2$. pass@5 $= 1-\binom{16}{5}/\binom{20}{5} = 1 - 4368/15504 = 0.718$.
+- (b) The plug-in gives $1-0.8^5 = 0.672$. The combinatorial estimator is unbiased: averaged over many draws of 20 samples it equals the true $1-(1-p)^5$ (simulation above: 0.672 vs 0.672). The plug-in $1-(1-\hat p)^5$ is a concave function of $\hat p = c/n$, so by Jensen's inequality its mean is **below** the true value (0.632 in the simulation): it underestimates pass@$k$. (On this one problem the two numbers differ for a different reason: 0.718 is the chance that 5 draws *without replacement* from these 20 contain a correct one, 0.672 the chance with replacement.)
+- (c) With a perfect verifier the harness succeeds whenever the 5 drawn samples contain a correct one, so its accuracy is exactly pass@5 = 0.718. With majority vote and identical wrong outputs, the wrong answer wins whenever it is the most frequent among the 5 drawn, which happens unless at least 3 of the 5 are correct: $\sum_{j=3}^{5}\binom{4}{j}\binom{16}{5-j}/\binom{20}{5} = (4\cdot120 + 1\cdot16)/15504 = 0.032$. Sampling more only pays with a verifier (section 6).
+<</SOLUTION>>
 """)
 
 code(r"""

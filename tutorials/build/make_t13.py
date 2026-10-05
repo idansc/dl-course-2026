@@ -22,7 +22,8 @@ Plan for today (≈ 60 min):
 4. Representations and generative models (P7–P9, 8 min)
 5. Post-training and agents (P10–P12, 7 min)
 6. Common exam mistakes: three wrong answers and the check that exposes each (10 min)
-7. If time: three more problems
+7. Mock exam from past papers (Moed B/C, 2026): the true/false blocks and four open questions (25 min in exam conditions, or homework)
+8. If time: three more problems
 
 In class we solve about half the problems on the board; the rest are homework, in exam conditions.
 <<STUDENT>>
@@ -588,8 +589,221 @@ Only the right answer keeps the signal at order 1 after 20 layers (RMS 0.6; the 
 **How to avoid all three:** write the shape of every tensor next to the formula, check one limiting case (a correct logit going up must lower the loss; a ReLU layer must preserve $\mathbb E[x^2]$), and count buffers separately from parameters.
 """)
 
+# ---------------------------------------------------------------------------------------------------------
 md(r"""
-## 7. If time: three more problems
+## 7. Mock exam from past papers
+
+Exam format, as in the 2026 papers: a true/false part (2 points per statement, no justification needed) and open questions (5 points each). Work on paper, closed book, 25 minutes; then run the check cells. The worked solutions are in the solution notebook.
+
+The open questions are ones no other tutorial uses. They are from the official Moed C solutions; the Moed C exam file we have is a different version of the paper and does not contain them, so their wording is reconstructed from the solutions. The true/false statements also appear, one or two at a time, in the tutorials of weeks 1, 2 and 4.
+
+### Part A: true / false
+
+**Past exam question (Moed B, 2026)**: mark each statement true or false.
+1. In a binary classification task, accuracy can be used as the training loss with gradient-based training instead of binary cross-entropy, and thereby give better results when accuracy is the only metric of interest.
+2. A convolution layer with a $3\times3$ filter, stride 1 and padding 1 preserves the spatial dimensions of the input.
+3. Analyses of ViT models found that it learns a locality bias similar to CNNs.
+4. In vanilla gradient descent on the whole dataset (no mini-batches), the loss decreases at every update step.
+5. Xavier initialization is particularly suited to layers with a tanh activation.
+
+**Past exam question (Moed C, 2026)**: mark each statement true or false.
+1. A Max Pooling layer with a $2\times2$ window and stride 2 contributes no learnable parameters, but does pass gradients backward in the backward pass.
+2. In Dropout, at inference the units must be dropped in the same way as during training, to keep the representation the network learned.
+3. In a Residual Network, the skip connection mathematically guarantees that the gradient never vanishes in the deep layers.
+4. In standard Self-Attention, permuting the order of the input tokens (the same permutation on queries, keys and values) changes the output matrix only by the same permutation of its rows.
+5. In a Transformer with Self-Attention layers, changing the input sequence length $T$ (keeping the same embedding dimension) does not change the number of learnable parameters.
+<<STUDENT>>
+✏️ Your answer: Moed B: 1 __ 2 __ 3 __ 4 __ 5 __ ; Moed C: 1 __ 2 __ 3 __ 4 __ 5 __
+<</STUDENT>>
+""")
+
+code(r"""
+# Evidence for the checkable statements (run after answering)
+w = torch.tensor([0.3, -1.2]); xs_tf = torch.randn(100, 2, generator=torch.Generator().manual_seed(0)); ys_tf = (xs_tf[:, 0] > 0).float()
+acc = lambda w: ((xs_tf @ w > 0).float() == ys_tf).float().mean().item()
+print("B1  accuracy at w and at w + 1e-4:", acc(w), acc(w + 1e-4), "-> zero gradient almost everywhere")
+print("B2  3x3, stride 1, pad 1 on 7x9:", tuple(nn.Conv2d(1, 1, 3, 1, 1)(torch.zeros(1, 1, 7, 9)).shape[-2:]))
+th, losses = torch.tensor(1.0), []
+for _ in range(3):
+    losses.append(th.item() ** 2); th = th - 1.1 * 2 * th                    # full-batch GD on L = θ², lr 1.1
+print("B4  full-batch GD on θ² with lr 1.1, loss per step:", [round(l, 2) for l in losses])
+xp = torch.randn(1, 1, 4, 4, requires_grad=True); mp = nn.MaxPool2d(2, 2)
+mp(xp).sum().backward()
+print("C1  max-pool params:", sum(p.numel() for p in mp.parameters()), "| nonzero input grads:", int((xp.grad != 0).sum()), "of 16 (one per window)")
+dr = nn.Dropout(0.5); h = torch.ones(8)
+print("C2  dropout train:", dr.train()(h).tolist(), "| eval:", dr.eval()(h).tolist())
+att = nn.MultiheadAttention(16, 2, batch_first=True).eval(); X = torch.randn(1, 6, 16); P = torch.randperm(6)
+with torch.no_grad():
+    out_X, out_PX = att(X, X, X)[0], att(X[:, P], X[:, P], X[:, P])[0]
+print("C4  max |Attn(PX) − P·Attn(X)| =", (out_PX - out_X[:, P]).abs().max().item())
+layer = nn.TransformerEncoderLayer(16, 2, 32, batch_first=True)
+print("C5  one encoder layer runs on T = 6 and T = 600 with the same", sum(p.numel() for p in layer.parameters()), "parameters:",
+      tuple(layer(torch.randn(1, 6, 16)).shape), tuple(layer(torch.randn(1, 600, 16)).shape))
+""")
+
+md(r"""
+<<SOLUTION>>
+**Moed B: F, T, F, F, T** (official). 1: accuracy is piecewise constant in the weights, so its gradient is 0 almost everywhere (printed) and undefined at the jumps. 2: $(n + 2\cdot1 - 3)/1 + 1 = n$. 3: official answer *false*: ViT has no built-in locality bias; it may learn local relations from data, but that is not the CNN's architectural bias. *Our note:* the statement says "learns", and the analyses do find learned locality: Dosovitskiy et al. (2021, Fig. 7) and Raghu et al. (2021) show lower-layer heads with small attention distances when the model is trained on enough data. A student who answers *true* with that argument has a case; the statement is ambiguous. 4: a step that is too large overshoots and the loss rises (printed: 1 → 1.44 → 2.07). 5: Xavier keeps the variance of activations and gradients for activations that are symmetric and linear near 0, such as tanh.
+
+**Moed C: T, F, F, T, T** (official). 1: no weights; the gradient is routed to the argmax of each window (printed: 4 nonzero gradients of 16). 2: at inference all units are on; inverted dropout scales by $1/(1-p)$ during training so that inference needs no change (printed). 3: the block's Jacobian is $I + \partial F/\partial x$; the identity path helps, but nothing prevents $\partial F/\partial x$ from cancelling it, and the gradients of the block's own weights can still vanish. 4: self-attention is permutation-equivariant (printed difference ≈ 1e-7). 5: true for $W_Q, W_K, W_V, W_O$ and the MLP; note that a model with *learned absolute* positional embeddings has a parameter table of size $T_{\max}\times d$, so its maximum length does fix some parameters.
+<</SOLUTION>>
+
+### Part B: open questions
+
+**Past exam question (Moed C, 2026)** — receptive field.
+A CNN has the layers CONV1 ($3\times3$, stride 1) → CONV2 ($3\times3$, stride 1) → MAX-POOL ($2\times2$, stride 2) → CONV3 ($3\times3$, stride 1). Using $r_\ell = r_{\ell-1} + (k_\ell-1)\,j_{\ell-1}$ and $j_\ell = j_{\ell-1}\,s_\ell$ with $r_0 = j_0 = 1$, compute the receptive field of one output unit of CONV3. Explain why a pooling (or strided) layer grows the receptive field more efficiently than adding another stride-1 convolution.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+#>> M1: receptive field of one CONV3 output unit, in input pixels
+# r: 1 -> conv1: 1 + 2*1 = 3 -> conv2: 3 + 2*1 = 5 -> pool: 5 + 1*1 = 6, j = 2 -> conv3: 6 + 2*2 = 10
+ANS["M1 RF"] = 10
+#<<
+""")
+
+code(r"""
+# AvgPool has the same window and stride as the max-pool; max-pool would route the gradient to one position per window
+net_m1 = nn.Sequential(nn.Conv2d(1, 1, 3), nn.Conv2d(1, 1, 3), nn.AvgPool2d(2, 2), nn.Conv2d(1, 1, 3))
+with torch.no_grad():
+    for m in net_m1:
+        if isinstance(m, nn.Conv2d): m.weight.fill_(1.0); m.bias.zero_()
+inp = torch.rand(1, 1, 32, 32, requires_grad=True)
+net_m1(inp)[0, 0, 5, 5].backward()
+rows = inp.grad[0, 0].abs().sum(1).nonzero().flatten()
+check("M1 RF", rows.max().item() - rows.min().item() + 1)
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer** (official solution). $r$: 1 → 3 → 5 → 6 ($j=2$) → $6 + 2\cdot2 = 10$: a $10\times10$ input patch. Each layer adds $(k-1)\,j$, where $j$ is the product of all earlier strides. A stride-1 conv adds $(k-1)j$ without changing $j$ (linear growth with depth); a stride-2 pool doubles $j$, so **every later layer** adds twice as much. With strides the receptive field grows exponentially in depth, at the price of resolution. (The gradient check uses all-positive weights, so no contribution cancels, and average pooling in place of max pooling: the receptive field depends only on window and stride, but max pooling passes the gradient to one position per window, so a gradient probe through it would read a smaller field.)
+<</SOLUTION>>
+
+**Past exam question (Moed C, 2026)** — Adam bias correction.
+Adam keeps $m_t = \beta_1 m_{t-1} + (1-\beta_1)g_t$ and $v_t = \beta_2 v_{t-1} + (1-\beta_2)g_t^2$, initialized $m_0 = v_0 = 0$, and steps $\theta \leftarrow \theta - \eta\,\hat m_t/(\sqrt{\hat v_t}+\epsilon)$ with $\hat m_t = m_t/(1-\beta_1^t)$, $\hat v_t = v_t/(1-\beta_2^t)$. What is the problem without the correction, what is its practical effect at the start of training, and how does the correction fix it?
+*Computation:* for a constant gradient $g$, with $\beta_1 = 0.9$, $\beta_2 = 0.999$ and $\epsilon \to 0$, give the ratio between the **uncorrected** step $\eta\,m_t/\sqrt{v_t}$ and the corrected step, at $t = 1, 10, 100$.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+#>> M2: (uncorrected step) / (corrected step) at t = 1, 10, 100; for a constant g both moments are biased by (1 − β^t)
+ANS["M2 ratio"] = [(1 - 0.9 ** t) / math.sqrt(1 - 0.999 ** t) for t in (1, 10, 100)]    # 3.16, 6.53, 3.24
+#<<
+""")
+
+code(r"""
+def adam_steps(correct, g=0.5, T=100, lr=1e-3, b1=0.9, b2=0.999):
+    m = v = 0.0; steps = []
+    for t in range(1, T + 1):
+        m, v = b1 * m + (1 - b1) * g, b2 * v + (1 - b2) * g * g
+        mh, vh = (m / (1 - b1 ** t), v / (1 - b2 ** t)) if correct else (m, v)
+        steps.append(lr * mh / math.sqrt(vh))
+    return np.array(steps)
+
+th = torch.zeros(1, requires_grad=True); opt_m2 = torch.optim.Adam([th], lr=1e-3, eps=0)
+torch_steps = []
+for _ in range(100):
+    before = th.item(); opt_m2.zero_grad(); (0.5 * th).sum().backward(); opt_m2.step(); torch_steps.append(before - th.item())
+print("corrected steps vs torch.optim.Adam, max diff:", np.abs(adam_steps(True) - np.array(torch_steps)).max())
+r = adam_steps(False) / adam_steps(True)
+check("M2 ratio", [r[0], r[9], r[99]])
+print(f"largest ratio over t = 1..100: {r.max():.2f} at t = {r.argmax() + 1}")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer.** With $m_0 = v_0 = 0$ both averages are biased toward 0 in the first steps: for stationary gradients $\mathbb E[m_t] = (1-\beta_1^t)\,\mathbb E[g]$ and $\mathbb E[v_t] = (1-\beta_2^t)\,\mathbb E[g^2]$, e.g. $m_1 = 0.1\,g_1$, $v_1 = 0.001\,g_1^2$. Dividing by $1-\beta^t$ removes exactly this factor, so $\hat m_t, \hat v_t$ are unbiased from the first step, and the correction fades as $\beta^t \to 0$.
+
+The effect on the step: the two biases are different, and $v$'s is much stronger ($\beta_2$ is closer to 1). The uncorrected step is $\frac{1-\beta_1^t}{\sqrt{1-\beta_2^t}}$ times the corrected one: **3.16× too large at $t=1$, 6.5× at $t=10$, 3.2× at $t=100$** (printed; the peak is 6.6, at $t = 12$). Without the correction the first steps are too *large*, which can destabilize the start of training; this is why Kingma & Ba introduced it.
+
+*Disagreement with the official solution.* The first version of the Moed C solution says that without the correction the first steps would be *very small*. That is wrong for the step: $m_t$ alone is too small, but the step divides by $\sqrt{v_t}$, which is biased even more, so the step is too large. The second version ("unstable or inappropriate step size") is vague but not wrong.
+<</SOLUTION>>
+
+**Past exam question (Moed C, 2026)** — Pre-LN vs Post-LN.
+The original Transformer uses **Post-LN**, $\mathrm{out} = \mathrm{LN}(x + \mathrm{Sublayer}(x))$; GPT-2 and most later models use **Pre-LN**, $\mathrm{out} = x + \mathrm{Sublayer}(\mathrm{LN}(x))$. Explain, in terms of the gradient that flows back through the residual connections, why Pre-LN trains deep Transformers more stably (and needs less learning-rate warm-up).
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+class LNBlock(nn.Module):                     # residual MLP block, Post-LN or Pre-LN
+    def __init__(self, d, pre):
+        super().__init__()
+        self.pre, self.ln = pre, nn.LayerNorm(d)
+        self.f = nn.Sequential(nn.Linear(d, 4 * d), nn.ReLU(), nn.Linear(4 * d, d))
+        nn.init.kaiming_normal_(self.f[0].weight, nonlinearity="relu"); nn.init.normal_(self.f[2].weight, std=(1 / (4 * d)) ** 0.5)
+    def forward(self, x):
+        return x + self.f(self.ln(x)) if self.pre else self.ln(x + self.f(x))
+
+d_m3 = 64
+X_m3 = torch.randn(32, 16, d_m3, generator=torch.Generator().manual_seed(0))
+Y_m3 = torch.randn(32, 16, d_m3, generator=torch.Generator().manual_seed(1))
+print("depth L | grad norm of the LAST block's first weight: Post-LN   Pre-LN | first block: Post-LN   Pre-LN")
+for L in [6, 12, 24, 48]:
+    row = {}
+    for pre in (False, True):
+        torch.manual_seed(0)
+        net_m3 = nn.Sequential(*[LNBlock(d_m3, pre) for _ in range(L)], *([nn.LayerNorm(d_m3)] if pre else []))   # Pre-LN ends with a final LN
+        F.mse_loss(net_m3(X_m3), Y_m3).backward()
+        g = [b.f[0].weight.grad.norm().item() for b in net_m3 if isinstance(b, LNBlock)]
+        row[pre] = (g[-1], g[0])
+    print(f"{L:7d} |                                     {row[False][0]:.4f}   {row[True][0]:.4f} |             {row[False][1]:.4f}   {row[True][1]:.4f}")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer** (official solution, plus what the check shows). In Post-LN every residual connection is followed by an LN, so the gradient that reaches layer $\ell$ through the skip path is multiplied by the Jacobian of every LN above it; the "identity" path is not an identity. In Pre-LN the stream $x_{\ell+1} = x_\ell + F(\mathrm{LN}(x_\ell))$ has an untouched identity path, $\partial x_{\ell+1}/\partial x_\ell = I + \dots$, so the gradient from the loss reaches every layer directly and each block's output is only a small additive update.
+
+What the check measures at initialization (deep MLP-residual stacks, unit-variance sublayers): the **last block's** gradient in Post-LN does not depend on depth (≈ 0.04 at every $L$), while in Pre-LN it shrinks as depth grows, ≈ $1/\sqrt L$ (0.024 at $L=6$ to 0.009 at $L=48$, a factor 2.7 for $\sqrt 8 = 2.8$). This is Xiong et al.'s (2020) result: in Post-LN the top layers get large gradients regardless of depth, so a full learning rate at the start makes large, destabilizing updates and warm-up is needed; in Pre-LN the gradient scale is balanced across layers and warm-up can be dropped.
+
+The first block shows the official argument at work: in Post-LN its gradient falls with depth (0.049 at $L=6$ to 0.028 at $L=48$), in Pre-LN it stays ≈ 0.05. At initialization this decay is mild (each LN rescales by $\approx 1/\mathrm{std}(x + F(x))$ and the sublayer path adds gradient back), far from a factor $1/\sqrt2$ per layer; it grows when the sublayer outputs dominate the residual stream.
+<</SOLUTION>>
+
+**Past exam question (Moed C, 2026)** — noise prediction and score matching.
+In DDPM, $x_t = \sqrt{\bar\alpha_t}\,x_0 + \sqrt{1-\bar\alpha_t}\,\epsilon$ with $\epsilon \sim \mathcal N(0, I)$, so $q(x_t\mid x_0) = \mathcal N(\sqrt{\bar\alpha_t}x_0, (1-\bar\alpha_t)I)$. Show that the noise $\epsilon$ equals the score $\nabla_{x_t}\log q(x_t\mid x_0)$ up to a scalar factor, and give the factor. What does this mean for "ε-prediction" vs "score matching"?
+*Computation:* give the factor for $\bar\alpha_t = 0.36$.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+#>> M4: the factor c in eps = c · score, at abar = 0.36
+ANS["M4 factor"] = -math.sqrt(1 - 0.36)        # eps = −sqrt(1 − abar) · ∇ log q
+#<<
+""")
+
+code(r"""
+from torch.distributions import Normal
+ab_m4 = torch.tensor(0.36)
+x0_m4 = torch.randn(1000, generator=torch.Generator().manual_seed(0)); eps_m4 = torch.randn(1000, generator=torch.Generator().manual_seed(1))
+xt_m4 = (ab_m4.sqrt() * x0_m4 + (1 - ab_m4).sqrt() * eps_m4).requires_grad_(True)
+Normal(ab_m4.sqrt() * x0_m4, (1 - ab_m4).sqrt()).log_prob(xt_m4).sum().backward()     # autograd score of q(x_t | x_0)
+c_m4 = (eps_m4 / xt_m4.grad)
+print(f"eps / score: mean {c_m4.mean():.6f}, spread {c_m4.std():.1e}")
+check("M4 factor", c_m4.mean())
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer** (official solution). For a Gaussian $\mathcal N(\mu, \sigma^2 I)$ the score is $-(x-\mu)/\sigma^2$. Here $\mu = \sqrt{\bar\alpha_t}x_0$, $\sigma^2 = 1-\bar\alpha_t$ and $x_t - \mu = \sqrt{1-\bar\alpha_t}\,\epsilon$, so
+$$\nabla_{x_t}\log q(x_t\mid x_0) = -\frac{\epsilon}{\sqrt{1-\bar\alpha_t}},\qquad \epsilon = -\sqrt{1-\bar\alpha_t}\;\nabla_{x_t}\log q(x_t\mid x_0).$$
+For $\bar\alpha_t = 0.36$ the factor is $-0.8$ (autograd, above, gives exactly this for every sample). Predicting $\epsilon$ and predicting the score are the same task up to a known, $t$-dependent scale and a sign; the two MSE objectives differ only by the per-$t$ weight $1/(1-\bar\alpha_t)$. DDPM's ε-prediction is denoising score matching written in different units, which is why the sampler can be read as Langevin dynamics or as a reverse SDE/ODE.
+<</SOLUTION>>
+""")
+
+code(r"""
+mock = [k for k in RESULTS if k.startswith("M")]
+print(f"mock exam: {sum(RESULTS[k] for k in mock)} / {len(mock)} computed parts OK")
+""")
+
+md(r"""
+## 8. If time: three more problems
 
 ✏️ **ViT patchify.** A ViT-B/16 on a $224\times224$ RGB image with $d = 768$. How many tokens enter the encoder (with CLS)? How many parameters does the patch embedding (a `Conv2d` with kernel = stride = 16) have?
 

@@ -448,7 +448,7 @@ code(r"""
 def plan_cost(positions, goal):           # positions: (K, H, 2), goal: (2,)  ->  (K,)
     return (positions - goal).norm(dim=-1).sum(1)  # @student: return ...  # TODO: summed distance to the goal over the horizon
 
-def cem(predict_positions, goal, H=10, K=200, n_elite=20, iters=2, seed=0):
+def cem(predict_positions, goal, H=10, K=200, n_elite=20, iters=2, seed=0, return_seq=False):
     g = torch.Generator().manual_seed(seed)
     probs = torch.full((H, NA), 1.0 / NA)
     for _ in range(iters):
@@ -458,7 +458,7 @@ def cem(predict_positions, goal, H=10, K=200, n_elite=20, iters=2, seed=0):
         elites = seqs[cost.topk(n_elite, largest=False).indices]
         probs = 0.9 * F.one_hot(elites, NA).float().mean(0) + 0.1 / NA
         #<<
-    return elites[0, 0]                   # first action of the best sequence (elites are sorted by cost)
+    return elites[0] if return_seq else elites[0, 0]   # first action of the best sequence (elites are sorted by cost)
 
 @torch.no_grad()
 def true_positions(s):                    # planner that queries the real simulator
@@ -532,6 +532,51 @@ md(r"""
 CEM in the true simulator solves all 30 episodes (mean final distance 0.38 px); random actions solve none (7.81 px). With only the learned model and the two latest frames, the same planner (same horizon, same 2 × 200 samples) solves 90% (27/30, 0.57 px). This holds even though section 4 showed the imagination is ≈ 3 px off at the planning horizon $H=10$: MPC replans every step from a real frame, and the planner only needs the model to *rank* action sequences correctly, which the accurate first steps mostly decide. Random shooting (one CEM iteration) drops to 67% (0.72 px): refitting the sampling distribution to the elites matters when the ball has to arrive and stop. In the plots both planners reach the same goals; the learned-model planner (orange) sometimes takes a different route (episode 3) and overshoots slightly before stopping (episodes 0 and 2).
 
 ✏️ Plan with a *longer* horizon `H=20` in the learned model. Section 4 says the imagined positions are several pixels off by then: does success go up or down?
+""")
+
+md(r"""
+**Exam-style question (new)**
+
+The controller above is **MPC**: at each of the $T=15$ steps of an episode, CEM evaluates $K=200$ action sequences of horizon $H=10$ in the learned world model, for 2 iterations, executes only the first action of the best sequence, observes the real next frame and replans. An alternative is a **learned policy** $\pi_\phi(a_t \mid o_{t-1}, o_t, g)$, e.g. trained by behavior cloning on the actions of CEM in the true simulator.
+- (a) How many world-model forward evaluations (one frame predicted for one sequence = one evaluation) does MPC spend per episode? How many network calls does the policy spend?
+- (b) Give one advantage of MPC over the learned policy, and one of the policy over MPC.
+- (c) Section 4 showed the imagined ball is ≈ 3 px off at horizon 10, yet MPC in the learned model solves most episodes. Why? Predict what happens if we plan **once** at $t=0$ (CEM over the whole $H=15$ steps) and execute the 15 actions **open loop**, first in the true simulator and then in the learned model.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+@torch.no_grad()
+def run_open_loop(predictor, seed, T=15):
+    g = torch.Generator().manual_seed(1000 + seed)                  # same start and goal as run_episode(…, seed)
+    s = torch.cat([LO + torch.rand(1, 2, generator=g) * (HI - LO), torch.zeros(1, 2)], 1)
+    goal = LO + torch.rand(2, generator=g) * (HI - LO)
+    #>> plan once: seq = cem(predictor(s), goal, H=T, seed=seed * 100, return_seq=True); then apply all T actions with env_step, no replanning; return the final distance to the goal
+    seq = cem(predictor(s), goal, H=T, seed=seed * 100, return_seq=True)
+    for a in seq:
+        s = env_step(s, a.view(1))
+    return (s[0, :2] - goal).norm().item()
+    #<<
+
+K_cem, H_cem, iters_cem, T_ep = 200, 10, 2, 15
+print(f"(a) MPC: {iters_cem} × {K_cem} × {H_cem} = {iters_cem * K_cem * H_cem:,} model evaluations per step, "
+      f"{iters_cem * K_cem * H_cem * T_ep:,} per episode;  policy: {T_ep} calls per episode")
+t1 = time.time()
+for name, predictor in [("true simulator", true_positions),
+                        ("learned model", lambda s: model_positions(wm, render_ball(s)[0], render_ball(s)[0]))]:   # ball at rest: o_{-1} = o_0
+    d = np.array([run_open_loop(predictor, i) for i in range(N_EP)])
+    print(f"(c) open loop, plan in the {name:15s}: success {np.mean(d < 1):.2f}, mean final distance {d.mean():.2f} px")
+print(f"    (MPC in the learned model, above: success {np.mean([r[0] for r in res_model]):.2f})   [{time.time() - t1:.0f}s]")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer.**
+- (a) $2 \times 200 \times 10 = 4{,}000$ model evaluations per decision, 60,000 per episode (batched, 20 network calls of batch 200 per decision). A policy needs one forward pass per step: 15 per episode, 4,000× less compute at decision time.
+- (b) **MPC:** needs no policy training; the goal and the cost function can change at test time (a new goal, an obstacle, a different task) without retraining, because only the dynamics are learned; and it corrects itself from the real observation at every step. **Policy:** cheap and fast at run time (one forward pass, no search), which matters on a robot at 10–50 Hz; and it does not need a world model that is accurate over $H$ steps. (Combinations exist: TD-MPC and AlphaZero plan with a learned model and use a learned policy/value to guide or truncate the search.)
+- (c) MPC executes one action and then replans from the **real** frame, so model errors never accumulate beyond one step of execution; the plan only needs to *rank* sequences correctly, and the accurate first steps mostly decide the ranking. Open loop removes this feedback, and the printed numbers show two separate costs. Even in the true simulator a single plan solves only 33% (1.28 px, vs 100% for MPC in section 5): 2 × 200 samples cannot find a precise 15-step sequence in $5^{15}$ possibilities, and nothing corrects the plan's own imprecision afterwards. In the learned model it drops to 7% (3.06 px), against 90% for MPC with the same model: the plan is built on imagined positions that drift by several pixels, and the compounding error of section 4 now reaches the real trajectory. Replanning corrects both the model's errors and the optimizer's.
+<</SOLUTION>>
 """)
 
 # --------------------------------------------------------------------------------------------
@@ -613,6 +658,42 @@ md(r"""
 ✏️ Plan with model (c): `evaluate("model", model=models["(c) 8-step unrolled"])` (about a minute). In our run (c) solved 93% and (a) 87% of the 30 episodes, a difference of 2 episodes, within noise: when MPC replans every step, long-horizon accuracy matters less than for open-loop imagination.
 
 ✏️ Unroll for $k=16$ instead of 8 (and 100 steps, same compute). Does the long-horizon error keep improving? What happens to the 1-step error?
+""")
+
+md(r"""
+**Exam-style question (new)**
+
+A policy is trained by behavior cloning. On states from the expert's distribution it makes a mistake with probability $\epsilon$ per step. Assume the worst case: after its first mistake it is in states it never saw and makes a mistake (cost 1) at **every** remaining step of the episode of length $T$; a step without a mistake costs 0.
+- (a) Show that the expected total cost is $\;C(\epsilon,T)=\sum_{t=1}^{T}\big[1-(1-\epsilon)^t\big]$, and that $C \approx \epsilon T^2/2$ when $\epsilon T \ll 1$, i.e. $O(\epsilon T^2)$. What is the expected cost if every step is taken from an expert state (no compounding)?
+- (b) Compute $C$ and the no-compounding cost for $\epsilon = 0.001$ and for $\epsilon = 0.01$, with $T = 100$.
+- (c) Which change in training removes the quadratic term, and how does model (c) of this section apply the same idea to a world model?
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+def bc_cost(eps, T):
+    #>> exact expected cost: sum over t = 1..T of the probability that a first mistake happened at or before step t
+    return sum(1 - (1 - eps) ** t for t in range(1, T + 1))
+    #<<
+
+rng_bc = np.random.default_rng(0)
+T_bc = 100
+for eps in [0.001, 0.01]:
+    first = rng_bc.geometric(eps, size=200_000)                      # step of the first mistake (1-based)
+    mc = np.clip(T_bc - first + 1, 0, None).mean()                  # it errs at every step from then on
+    print(f"eps = {eps}: exact {bc_cost(eps, T_bc):6.2f}   Monte Carlo {mc:6.2f}   eps T^2/2 = {eps * T_bc ** 2 / 2:5.2f}   "
+          f"bound eps T^2 = {eps * T_bc ** 2:6.1f}   no compounding eps T = {eps * T_bc:.2f}")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer.**
+- (a) Step $t$ costs 1 iff the first mistake happened at or before $t$, which has probability $1-(1-\epsilon)^t$; summing over $t$ gives $C$ by linearity of expectation. For $\epsilon t \ll 1$, $1-(1-\epsilon)^t \approx \epsilon t$, so $C \approx \epsilon\sum_t t = \epsilon T(T+1)/2 = O(\epsilon T^2)$, and $C \le \epsilon T^2$ always. Without compounding each step costs $\epsilon$ independently: $\epsilon T$.
+- (b) $\epsilon=0.001$: $C = 4.89$ vs $\epsilon T = 0.1$, 49× worse ($\epsilon T^2/2 = 5$ is a good approximation). $\epsilon = 0.01$: $C = 37.2$ vs $1$; here $\epsilon T = 1$ is not small, the approximation (50) overshoots and $C$ saturates toward $T$. The Monte Carlo column matches the exact sum.
+- (c) Train on the **learner's own state distribution**: DAgger runs the current policy, has the expert label the states it visits, and retrains; the per-step error is then measured where the policy actually goes and the cost bound becomes $O(\epsilon T)$ (Ross et al., 2011). Model (c) does the same for a world model: the unrolled loss feeds the model its own predictions and supervises them with the real future frames, so it is trained on the inputs it sees at test time. Its 20-step error is 9× lower than teacher forcing's (above).
+<</SOLUTION>>
 """)
 
 # --------------------------------------------------------------------------------------------

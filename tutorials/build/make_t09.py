@@ -271,8 +271,9 @@ def trailing_steps(n):
     return (np.round(np.arange(K, 0, -K / n)).astype(int) - 1).tolist()
 
 @torch.no_grad()
-def ddpm_sample(model, n, ks, shape=(2,), y=None, gen=None):
-    x = torch.randn(n, *shape, generator=gen).to(device)
+def ddpm_sample(model, n, ks, shape=(2,), y=None, gen=None, x=None):
+    # x: optional starting point x_{ks[0]} (default: pure noise)
+    x = torch.randn(n, *shape, generator=gen).to(device) if x is None else x
     ab = abar.to(device)
     for i, k in enumerate(ks):
         k_prev = ks[i + 1] if i + 1 < len(ks) else -1
@@ -418,6 +419,105 @@ show_digits(xs, 10, "DDPM on MNIST (16×16): 200 ancestral steps, null label = u
 md(r"""
 After 800 steps (1.7 epochs) on 16×16 images the unconditional samples (null label) are stroke-like and only a few are readable digits. Section 5 shows that the same network with labels and guidance does much better.
 Nothing in the loss or the sampler knows that $x$ is an image: `q_sample` broadcasts over any shape. This is why latent diffusion is a drop-in change.
+""")
+
+md(r"""
+**Past exam question (Moed B, 2026)**
+
+This question refers to a **DDPM** (Denoising Diffusion Probabilistic Model) operating in **pixel space**. Below are interpolations performed on representations $x_t$ taken from different steps of the diffusion process with $T=1000$ steps. The possible steps are
+$$t \in \{1000,\ 500,\ 0\}.$$
+1. Write next to each figure the step from which the representations were taken.
+2. Is an **Encoder** and a **Decoder** with trained parameters, as in a VAE, needed to produce the final visual result? Explain briefly.
+
+*(The exam showed three rows of interpolation images, not reproduced here; the cell below produces the same kind of rows with our MNIST model. $t=1000 \to$ our last step $k=199$; $t=0 \to$ the clean images. For the middle step we use $k=30$ ($\bar\alpha=0.78$), not the proportional $k=99$ ($\bar\alpha=0.07$, like $t=500$ in Ho et al.): Ho et al.'s CelebA-HQ model still recovers the endpoints from $t=500$, our 16×16 model trained for 1.7 epochs does not, and at $k=99$ its row is already as uninformative as the $t=1000$ row.)*
+
+Procedure of Ho et al. (2020, Sec. 4.3): encode both images with the fixed forward process, $x_k \sim q(x_k\mid x_0)$ and $x_k' \sim q(x_k\mid x_0')$; blend $\bar x_k = (1-\lambda)x_k + \lambda x_k'$; decode $\bar x_k$ with the reverse process from step $k$ to 0, with the same sampler noise for every $\lambda$. At $t=0$ there is nothing to decode: the blend is the output.
+<<STUDENT>>
+✏️ Your answer: (1) which of the rows A, B, C below comes from $t=1000$, $500$, $0$? (2) Encoder/decoder needed?
+<</STUDENT>>
+""")
+
+code(r"""
+@torch.no_grad()
+def interp_row(model, xa, xb, k, n=8, seed=0):
+    # xa, xb: (1, 1, RES, RES) images; k: DDPM step to interpolate at, or None for t = 0 (blend the pixels)
+    lams = torch.linspace(0, 1, n).tolist()
+    if k is None:
+        return torch.cat([(1 - l) * xa + l * xb for l in lams])
+    g = torch.Generator().manual_seed(seed)
+    y = torch.full((1,), NULL, device=device)                        # unconditional
+    #>> x_k, x_k' = q_sample of xa, xb at step k (independent noise from g); for each λ decode (1−λ)x_k + λx_k' with ddpm_sample(model, 1, [k, k−1, …, 0], shape=(1, RES, RES), y=y, gen=Generator(seed+1), x=…)
+    kk = torch.full((1,), k, device=device)
+    xa_k = q_sample(xa, kk, torch.randn(xa.shape, generator=g).to(device))
+    xb_k = q_sample(xb, kk, torch.randn(xb.shape, generator=g).to(device))
+    rows = [ddpm_sample(model, 1, list(range(k, -1, -1)), shape=(1, RES, RES), y=y,
+                        gen=torch.Generator().manual_seed(seed + 1), x=(1 - l) * xa_k + l * xb_k) for l in lams]
+    return torch.cat(rows)
+    #<<
+
+xa, xb = MX[0:1].to(device), MX[1:2].to(device)                      # a 5 and a 0
+rows = {"A": interp_row(ddpm_mnist, xa, xb, 30), "B": interp_row(ddpm_mnist, xa, xb, K - 1), "C": interp_row(ddpm_mnist, xa, xb, None)}
+fig, axes = plt.subplots(3, 1, figsize=(6.5, 3.6))
+for ax, (name, r) in zip(axes, rows.items()):
+    show_digits(r, 8, f"row {name}", ax)
+plt.suptitle("Interpolation between two training digits at three diffusion steps (λ = 0 … 1, left to right)"); plt.tight_layout(); plt.show()
+
+# numeric check: do the row's ends reproduce x_a and x_b, and do the two ends differ? (mean squared pixel error, pixels in [−1, 1])
+mse = lambda u, v: ((u - v) ** 2).mean().item()
+for name, r in rows.items():
+    print(f"row {name}: MSE(λ=0 output, x_a) = {mse(r[0], xa):.3f}   MSE(λ=1 output, x_b) = {mse(r[-1], xb):.3f}   "
+          f"MSE(λ=0 output, λ=1 output) = {mse(r[0], r[-1]):.3f}   (MSE(x_a, x_b) = {mse(xa, xb):.3f})")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer.**
+1. **C is $t=0$**: interpolating clean images is a pixel cross-fade; the middle images are the 5 and the 0 superimposed (ghosting), not a digit. **A is $t=500$**: the two ends come back close to the originals (small MSE to $x_a$ and $x_b$, printed), and the middle images are single strokes that morph from the 5 to the 0: the reverse process maps every blend back to an image that looks like data. **B is $t=1000$**: $\bar\alpha_T = 3\cdot10^{-5}$, so $x_T$ carries no information about $x_0$; the row is a new sample unrelated to either endpoint (large MSE to $x_a$ and $x_b$), and it barely changes along the row, since both ends start from noise and the sampler noise is fixed.
+2. **No trained encoder or decoder in the VAE sense.** The "encoder" is the fixed forward process $q(x_t\mid x_0)=\mathcal N(\sqrt{\bar\alpha_t}x_0,(1-\bar\alpha_t)I)$, which has no trained parameters, and $x_t$ is itself a (noisy) image in pixel space. The final image is produced by the reverse denoising process, i.e. by the one trained network $\varepsilon_\theta$ run for $t$ steps; at $t=0$ nothing is needed at all.
+
+*Note on the official solution.* It assigns the rows by their noise level (cleanest row $t=0$, medium noise $t=500$, near pure noise $t=1000$). That reading is right only if the figures show the blended $x_t$ themselves, before denoising. If they show the decoded results, as in Ho et al.'s Fig. 9 and in the cell above, every row is clean and the rows must be told apart by *what* they show (ghosting / morphing / unrelated samples), as in the answer above. Our model is small (16×16, 800 steps), so the decoded digits are rough; the three behaviours are still visible.
+<</SOLUTION>>
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+In a **Denoising Diffusion Probabilistic Model (DDPM)**, a sample is obtained by $T$ iterative denoising steps from $x_T \sim \mathcal N(0, I)$ to $x_0$, where at each step a network $f_\theta(x_t, t)$ predicts the noise that was added.
+
+**Answer briefly:** which parameters are trained in a DDPM, and which components (modules) make up the complete generative model? Then **explain what a Latent Diffusion Model (LDM) is**, and what its main advantage is over a DDPM that operates directly in pixel space. **Does moving to an LDM change the number of learned parameters?** Explain.
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+from torch.utils.flop_counter import FlopCounterMode
+
+def forward_flops(model, res):
+    x, t, y = torch.zeros(1, 1, res, res), torch.zeros(1), torch.zeros(1, dtype=torch.long)
+    with FlopCounterMode(display=False) as fc:
+        model(x, t, y)
+    return fc.get_total_flops()
+
+unet_cpu = copy.deepcopy(ddpm_mnist).cpu()
+#>> n_trained = number of trainable parameters of the U-Net; is the noise schedule `betas` among them? FLOPs of one forward pass at 16×16 and at 28×28
+n_trained = sum(p.numel() for p in unet_cpu.parameters() if p.requires_grad)
+schedule_is_trained = any(p is betas for p in unet_cpu.parameters()) or betas.requires_grad
+f16, f28 = forward_flops(unet_cpu, 16), forward_flops(unet_cpu, 28)
+#<<
+print(f"trained parameters: {n_trained:,} (all in the denoiser);  schedule β trained: {schedule_is_trained}")
+print(f"the same {n_trained:,} parameters run on 16×16 and 28×28 inputs; FLOPs per call: {f16 / 1e6:.1f}M vs {f28 / 1e6:.1f}M "
+      f"(ratio {f28 / f16:.2f}, pixel ratio {(28 / 16) ** 2:.2f})")
+print(f"Stable Diffusion: a 512×512×3 image vs its 64×64×4 latent = {512 * 512 * 3 / (64 * 64 * 4):.0f}× fewer values per denoising step")
+""")
+
+md(r"""
+<<SOLUTION>>
+**Answer** (the solution files have no official solution for this question; this is ours).
+- **Trained in a DDPM:** only the parameters $\theta$ of the denoising network $f_\theta(x_t,t)$ (a U-Net or DiT, including its time embedding). The noise schedule $\beta_1..\beta_T$ (hence $\bar\alpha_t$) is fixed, not learned (printed above: 0 schedule parameters). **Modules of the generative model:** the fixed forward (noising) process $q$, used only in training, and the reverse process $p_\theta(x_{t-1}\mid x_t)$, which is the network plus the fixed sampler update ($\mu_\theta$, $\sigma_t$). There is no separate encoder or decoder.
+- **LDM** (Rombach et al., 2022): first train an autoencoder (VAE) $E, D$ that maps an image to a smaller latent, $z = E(x)$, e.g. $512\times512\times3 \to 64\times64\times4$; then train the same diffusion model on $z$ instead of $x$; sample $z_0$ by denoising and output $D(z_0)$. **Advantage:** every one of the $T$ denoising steps runs on a 48× smaller tensor (printed), so training and sampling are much cheaper, and the diffusion model spends its capacity on semantic content while the autoencoder handles imperceptible pixel detail.
+- **Number of parameters:** the complete system gains the autoencoder's parameters ($E$ and $D$, trained beforehand and frozen during diffusion training), so the total grows. The denoiser itself keeps (almost) the same count: a convolution's parameters do not depend on the spatial size (the same U-Net above runs on 16×16 and 28×28 with the same parameters, and its FLOPs scale with the number of pixels, ratio ≈ 3.1), and only the first and last layers change with the number of channels (4 latent channels instead of 3). What drops is compute per step, not parameters.
+<</SOLUTION>>
 """)
 
 md(r"""
