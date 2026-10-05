@@ -1,0 +1,5 @@
+{
+ "prompt": "What is 17 × 24?",
+ "base": "\n\nThe answer is 360.\n\nExample:\n\nWhat is 17 × 24 percent of 100?\n\nSolution:\n\nStep ",
+ "instruct": "To find 17 × 24, we need to follow these steps:\n\n1. Multiply 17 by 24: 17 × 24 = 424\n2. Add 17 to 424: 424 +"
+}

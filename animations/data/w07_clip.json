@@ -1,0 +1,79 @@
+{
+ "captions": [
+  "a photo of a wrist watch",
+  "a photo of a pair of sunglasses",
+  "a photo of a handbag",
+  "a photo of a running shoe",
+  "a photo of a t-shirt"
+ ],
+ "names": [
+  "CASIO G-Shock Men Black Digital Watch G-7710-1DR G223",
+  "Pal Zileri Men Casual Gold Frame Sunglasses",
+  "Rocky S Women White Handbag",
+  "ADIDAS Men White Corona Sports Shoes",
+  "Disney Kids Boy's Crew Sea Life Sialing Green Teen Kidswear"
+ ],
+ "S": [
+  [
+   0.27047017216682434,
+   0.15086452662944794,
+   0.155660480260849,
+   0.1770741492509842,
+   0.13852085173130035
+  ],
+  [
+   0.17867447435855865,
+   0.2862972319126129,
+   0.18952491879463196,
+   0.18462741374969482,
+   0.17030736804008484
+  ],
+  [
+   0.15874069929122925,
+   0.15453627705574036,
+   0.2684207260608673,
+   0.15293359756469727,
+   0.16416065394878387
+  ],
+  [
+   0.14526662230491638,
+   0.1318729966878891,
+   0.14143326878547668,
+   0.23899225890636444,
+   0.14828163385391235
+  ],
+  [
+   0.16956493258476257,
+   0.18204006552696228,
+   0.16655907034873962,
+   0.19132836163043976,
+   0.2586522698402405
+  ]
+ ],
+ "logit_scale": 100.00000762939453,
+ "zs_classes": [
+  "wrist watch",
+  "backpack",
+  "handbag",
+  "running shoe",
+  "t-shirt",
+  "pair of sunglasses"
+ ],
+ "zs_prompts": [
+  "a photo of a wrist watch",
+  "a photo of a backpack",
+  "a photo of a handbag",
+  "a photo of a running shoe",
+  "a photo of a t-shirt",
+  "a photo of a pair of sunglasses"
+ ],
+ "zs_cos": [
+  0.16544696688652039,
+  0.2851576805114746,
+  0.21967750787734985,
+  0.2033504992723465,
+  0.1792920082807541,
+  0.1694619059562683
+ ],
+ "query_name": "Wildcraft Unisex Black Outdoor Backpack"
+}
