@@ -189,7 +189,7 @@ class FlowMatchingPaths(Scene):
         V = (big1 - big0)[sel]
         vbar, vex = V.mean(0), g.velocity(q[None], tq)[0]
         sc = 0.6
-        cap = swap_caption(self, cap, f"4. lines cross: at one point (t = {tq}) the {len(sel)} passing pairs point in different directions")
+        cap = swap_caption(self, cap, f"4. lines cross: {len(sel)} pairs pass this point at t = {tq}, in different directions")
         self.play(lines.animate.set_stroke(opacity=0.15), noise_c.animate.set_opacity(0.25), data_c.animate.set_opacity(0.25))
         qc = Circle(radius=rad * (P.c2p(1, 0)[0] - P.c2p(0, 0)[0]), color=INK, stroke_width=3).move_to(P.c2p(*q))
         arrows = VGroup(*[Arrow(P.c2p(*q), P.c2p(*(q + sc * v)), buff=0, color=ORANGE_, stroke_width=2, stroke_opacity=0.55,
@@ -202,7 +202,7 @@ class FlowMatchingPaths(Scene):
             Text(f"average of the {len(sel)} pairs:  ({vbar[0]:+.2f}, {vbar[1]:+.2f})", font_size=22, color=ORANGE_),
             Text(f"exact v(x, t) for the mixture:  ({vex[0]:+.2f}, {vex[1]:+.2f})", font_size=22, color=PURPLE_),
         ).arrange(DOWN, aligned_edge=LEFT, buff=0.15).move_to([3.6, -0.5, 0])
-        self.play(GrowArrow(mean_arrow), FadeIn(nums))
+        self.play(arrows.animate.set_stroke(opacity=0.2).set_fill(opacity=0.2), GrowArrow(mean_arrow), FadeIn(nums))
         self.wait(2)
 
         # field over t
@@ -402,7 +402,7 @@ class FewStepSampling(Scene):
                 dt.move_to(P.c2p(*x))
             return [Transform(segs, new_segs), *[dt.animate.move_to(P.c2p(*x)) for dt, x in zip(dots, pth[-1])]]
 
-        cap = swap_caption(self, cap, "2. one step: x_0 + v(x_0, 0) = the data mean, so every sample lands in the empty center",
+        cap = swap_caption(self, cap, "2. one step: x_0 + v(x_0, 0) = data mean: every sample lands in the empty center",
                            size=26)
         self.play(trails.animate.set_stroke(opacity=0.12), FadeIn(mid), FadeIn(chips), *chip_on(0))
         segs_ex = VGroup()
