@@ -680,6 +680,107 @@ Which optimizer reaches the lowest training loss, and does the ranking on traini
 ✏️ Replace `warmup_cosine` by `wsd` in `train` and re-run Adam and Muon. Where do the two loss curves differ, and is the final test accuracy different?
 """)
 
+md(r"""
+**Practical note: the update-to-weight ratio**
+
+The loss curve tells you late that the learning rate is wrong; the ratio $\|\Delta W\|/\|W\|$ of each weight matrix tells you at the first steps. $\Delta W$ is the actual change made by `opt.step()` (whatever the optimizer), $\|\cdot\|$ the Frobenius norm. The usual rule of thumb (Karpathy, CS231n) is $\approx 10^{-3}$ per step; $10^{-5}$ means the weights do not move, $\gtrsim 10^{-1}$ means each step rewrites a large part of the layer. Below: the MLP of 5.2, plain SGD (no momentum, constant LR), 300 steps, four learning rates.
+""")
+
+code(r"""
+def ratio_run(lr, steps=300, seed=0):
+    torch.manual_seed(seed)
+    net = make_mlp()
+    opt = MySGD(net.parameters(), lr=lr)
+    Ws = [m.weight for m in net if isinstance(m, nn.Linear)]
+    gen, ratios, losses = torch.Generator().manual_seed(seed), [], []
+    for _ in range(steps):
+        bi = torch.randint(0, N_TRAIN, (BS,), generator=gen).to(device)
+        loss = F.cross_entropy(net(Xtr[bi]), ytr[bi])
+        opt.zero_grad(); loss.backward()
+        before = [W.detach().clone() for W in Ws]
+        opt.step()
+        #>> append the list of ||W_after − W_before|| / ||W_before|| for every weight matrix
+        ratios.append([((W.detach() - W0).norm() / W0.norm()).item() for W, W0 in zip(Ws, before)])
+        #<<
+        losses.append(loss.item())
+    with torch.no_grad():
+        acc = (net(Xte).argmax(1) == yte).float().mean().item()
+    return np.array(ratios), np.array(losses), acc
+
+ratio_res = {lr: ratio_run(lr) for lr in [1e-3, 1e-2, 1e-1, 3.0]}
+fmt = {"float": lambda v: f"{v:.1e}"}
+for lr, (r, l, acc) in ratio_res.items():
+    bad = np.flatnonzero(~np.isfinite(l))
+    tail = (f"median, last 100 steps {np.array2string(np.median(r[-100:], 0), formatter=fmt)} | loss (last 30) {np.mean(l[-30:]):.3f}"
+            if len(bad) == 0 else f"loss is NaN from step {bad[0] + 1}; layer-2 ratio at steps 1–{bad[0]}: {np.array2string(r[:bad[0], 1], formatter=fmt)}")
+    print(f"lr {lr:6g}: step-1 ratios {np.array2string(r[0], formatter=fmt)} | {tail} | test acc {acc:.3f}")
+
+# check: plain SGD moves W by exactly −lr·grad, so at step 1 the ratio is lr·||grad||/||W|| (same first batch)
+torch.manual_seed(0); net_c = make_mlp()
+bi = torch.randint(0, N_TRAIN, (BS,), generator=torch.Generator().manual_seed(0)).to(device)
+F.cross_entropy(net_c(Xtr[bi]), ytr[bi]).backward()
+pred = [(0.1 * m.weight.grad.norm() / m.weight.norm()).item() for m in net_c if isinstance(m, nn.Linear)]
+print("check, lr 0.1, step 1: lr·||g||/||W|| =", np.array2string(np.array(pred), formatter=fmt),
+      " measured", np.array2string(ratio_res[0.1][0][0], formatter=fmt))
+assert np.allclose(pred, ratio_res[0.1][0][0], rtol=1e-3)
+
+fig, ax = plt.subplots(figsize=(9, 3.8))
+for i, (lr, (r, l, acc)) in enumerate(ratio_res.items()):
+    ax.plot(np.arange(1, len(r) + 1), r[:, 1], color=f"C{i}", label=f"lr {lr:g} (test acc {acc:.2f})")
+ax.axhline(1e-3, color="gray", ls=":", label="rule of thumb 1e-3")
+ax.set(title="SGD on the FashionMNIST MLP: ||ΔW|| / ||W|| of the 2nd layer per step", xlabel="step", ylabel="update / weight",
+       yscale="log", xscale="log")
+ax.legend(fontsize=8); plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+- For plain SGD the step-1 ratio is exactly $\eta\,\|g\|/\|W\|$ (check above), so it scales linearly with $\eta$: about $1.5\cdot10^{-5}$–$7\cdot10^{-5}$ at $\eta=10^{-3}$ and 100× that at $\eta=0.1$.
+- $\eta = 10^{-3}$: ratios $\sim 2\cdot10^{-5}$, the loss is still 2.27 after 300 steps (≈ $\log 10$, the initial loss), test accuracy 0.27. $\eta = 10^{-2}$: $\sim 5\cdot10^{-4}$, 0.62.
+- $\eta = 0.1$: $1.5\cdot10^{-3}$ at step 1, rising to $6\cdot10^{-3}$–$2\cdot10^{-2}$; the best run (0.82). The $10^{-3}$ rule is a ballpark for long, scheduled runs; in a short constant-LR run like this one the best $\eta$ sits a few times above it.
+- $\eta = 3$: already $5\cdot10^{-2}$ at step 1, then the ratio grows every step ($0.1, 0.4, 17, \dots$) and the loss is NaN at step 9. A ratio $\gtrsim 10^{-1}$ that keeps growing is the signature of divergence, visible before the loss explodes.
+- The output layer has the largest ratio (2.5–5× the other layers at step 1); compare layers, not only one global number.
+""")
+
+md(r"""
+**Practical note: random search beats grid search**
+
+Bergstra & Bengio (2012): when only some hyperparameters matter, a $3\times3$ grid spends 9 runs on only **3 distinct values** of the important one; 9 random points test **9**. Synthetic check, no training: the score depends only on $x$ (think $\log_{10}$ of the learning rate, rescaled to $[0,1]$) through a bump of width 0.1 around an unknown optimum $x^*$; $y$ (e.g. a dropout rate) has no effect. 10,000 random draws of $x^*$; for each we keep the best of the 9 trials.
+""")
+
+code(r"""
+rng = np.random.default_rng(0)
+score = lambda x, y, x_star: np.exp(-0.5 * ((x - x_star) / 0.1) ** 2)    # y is ignored on purpose
+R = 10_000
+x_star = rng.uniform(0, 1, R)
+g3 = (np.arange(3) + 0.5) / 3
+GX, GY = [a.ravel() for a in np.meshgrid(g3, g3)]                         # 3x3 grid: 9 points, 3 distinct x
+#>> 9 random points per draw: arrays RX, RY of shape (R, 9), uniform in [0, 1]
+RX, RY = rng.uniform(0, 1, (R, 9)), rng.uniform(0, 1, (R, 9))
+#<<
+best_grid = score(GX[None], GY[None], x_star[:, None]).max(1)
+best_rand = score(RX, RY, x_star[:, None]).max(1)
+print(f"distinct x values tried: grid {len(np.unique(GX))}, random {len(np.unique(RX[0]))}")
+print(f"best score (1 = optimum found): grid mean {best_grid.mean():.3f}, median {np.median(best_grid):.3f} | "
+      f"random mean {best_rand.mean():.3f}, median {np.median(best_rand):.3f}")
+print(f"P(best ≥ 0.95): grid {(best_grid >= 0.95).mean():.3f} | random {(best_rand >= 0.95).mean():.3f}")
+assert best_rand.mean() > best_grid.mean()
+
+fig, ax = plt.subplots(1, 2, figsize=(9, 4), sharey=True)
+xx, xs0 = np.linspace(0, 1, 200), x_star[0]                              # one draw of the optimum
+for a, (name, px, py) in zip(ax, [("grid", GX, GY), ("random", RX[0], RY[0])]):
+    a.scatter(px, py, s=40, zorder=3, label="trials")
+    a.plot(xx, 0.25 * score(xx, 0, xs0) - 0.3, "C1", label=f"score(x), x* = {xs0:.2f}")
+    for v in px: a.axvline(v, color="gray", lw=0.5, ls=":")
+    a.set(title=f"{name}: {len(np.unique(px))} distinct x, best score {score(px, py, xs0).max():.2f}",
+          xlabel="x (matters)", ylim=(-0.32, 1.05))
+ax[0].set_ylabel("y (does not matter)"); ax[0].legend(fontsize=8, loc="center right")
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+Over 10,000 draws of $x^*$ the best of 9 random trials has mean score 0.83 (median 0.93) vs 0.68 (median 0.71) for the grid, and reaches $\ge 0.95$ in 45% of draws vs 20%. The grid's best $x$ can be up to $1/6$ away from $x^*$ whatever the 9 runs cost; random search spends every run on a new $x$. With $k$ hyperparameters of which one matters, a grid of $m^k$ runs still tests only $m$ values of it. Sample on a log scale for learning rates and weight decay, and use the random-search budget before trying anything smarter (Bayesian optimization, successive halving).
+""")
+
 # ---------------------------------------------------------------- 6. Adam warmup
 md(r"""
 ## 6. Why Adam needs warmup

@@ -283,6 +283,53 @@ md(r"""
 """)
 
 md(r"""
+**Practical note: why backprop runs in reverse mode**
+
+For $L:\mathbb{R}^n\to\mathbb{R}$ the full gradient is one vector-Jacobian product: run the graph backward once from $\partial L/\partial L = 1$, at a cost of a few forward passes. Forward mode (Jacobian-vector products) pushes one input direction through the graph per pass, so it needs $n$ passes, one per basis vector $e_i$, to get the same $n$ numbers. Below: `torch.func.vjp` once vs `torch.func.jvp` in a loop over $e_1,\dots,e_n$, for the MLP of this section ($20\to H\to 10$, tanh) with $n\approx 10^3$–$10^4$ parameters.
+""")
+
+code(r"""
+import time, warnings
+warnings.filterwarnings("ignore", category=FutureWarning)
+from torch.func import vjp, jvp
+
+def mlp_loss_fn(H, D=20, C=10, N=64):
+    shapes = [(D, H), (H,), (H, C), (C,)]
+    xs, ys = torch.randn(N, D), torch.randint(0, C, (N,))
+    def loss(theta):                         # all parameters as one flat vector θ ∈ R^n
+        W1, b1, W2, b2 = [t.view(s) for t, s in zip(theta.split([math.prod(s) for s in shapes]), shapes)]
+        return F.cross_entropy(torch.tanh(xs @ W1 + b1) @ W2 + b2, ys)
+    return loss, sum(math.prod(s) for s in shapes)
+
+def best_time(fn, reps):
+    ts = []
+    for _ in range(reps):
+        t0 = time.perf_counter(); out = fn(); ts.append(time.perf_counter() - t0)
+    return min(ts), out
+
+torch.manual_seed(0)
+for H in [32, 100, 320]:
+    loss, n = mlp_loss_fn(H)
+    theta = 0.1 * torch.randn(n)
+    def reverse():
+        #>> one vjp: the gradient of loss at theta (cotangent 1 for the scalar output)
+        _, pullback = vjp(loss, theta)
+        return pullback(torch.tensor(1.0))[0]
+        #<<
+    def forward():                           # n jvps, one per basis vector e_i: entry i of the gradient each
+        return torch.stack([jvp(loss, (theta,), (e,))[1] for e in torch.eye(n)])
+    t_rev, g_rev = best_time(reverse, 5)
+    t_fwd, g_fwd = best_time(forward, 1)
+    print(f"n = {n:5d}: reverse (1 vjp) {1e3 * t_rev:6.2f} ms | forward ({n} jvps) {1e3 * t_fwd:7.0f} ms | "
+          f"ratio {t_fwd / t_rev:6.0f}x | max |g_rev − g_fwd| = {(g_rev - g_fwd).abs().max().item():.1e}")
+    assert torch.allclose(g_rev, g_fwd, atol=1e-5)
+""")
+
+md(r"""
+Same gradient to float32 round-off. The time ratio grows linearly with $n$ and is roughly $n$ itself: ≈ 1,000× at $n=1{,}002$ and ≈ 9,000× at $n=9{,}930$ (±20% between our runs; exact times vary by machine), i.e. one jvp costs about as much as the whole vjp. At $10^8$ parameters forward mode would need $10^8$ passes per training step. Forward mode wins in the opposite shape, few inputs and many outputs (e.g. the Jacobian of $\mathbb{R}\to\mathbb{R}^m$). The price of reverse mode is memory: the forward activations must be stored until the backward pass reads them.
+""")
+
+md(r"""
 **Past exam question (Moed B, 2026)**
 
 True or false: in a binary classification task, one can use accuracy as the training loss, optimized with gradients, instead of binary cross-entropy, and thus obtain better results when accuracy is the only metric of interest.
@@ -313,6 +360,63 @@ fig, ax = plt.subplots(1, 2, figsize=(10, 3))
 ax[0].plot(bs, [acc_of_bias(b).item() for b in bs]); ax[0].set(title="accuracy vs bias: flat steps", xlabel="b", ylabel="accuracy")
 ax[1].plot(bs, [F.binary_cross_entropy_with_logits(x_acc + b, y_acc).item() for b in bs]); ax[1].set(title="BCE vs bias: smooth", xlabel="b", ylabel="BCE")
 plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+**Practical note: check the initial loss**
+
+With a small random init the logits are near 0, the softmax is near uniform, and the cross-entropy at step 0 is $-\log(1/C) = \log C$ ($\log 10 = 2.303$ for 10 classes). Compute it before training: a different number means a bug (init scale, loss reduction, preprocessing). The check is necessary, not sufficient: some bugs only show later. Below, an MLP 784–256–10 on 512 MNIST images, then three bugs.
+""")
+
+code(r"""
+from torchvision import datasets
+mnist = datasets.MNIST("./data", train=True, download=True)
+X_mn = ((mnist.data[:10_000].float() / 255 - 0.1307) / 0.3081).view(-1, 784)
+y_mn = mnist.targets[:10_000]
+
+def mnist_mlp(weight_std=None):
+    torch.manual_seed(0)
+    net = nn.Sequential(nn.Linear(784, 256), nn.ReLU(), nn.Linear(256, 10))
+    if weight_std is not None:
+        for m in net:
+            if isinstance(m, nn.Linear): nn.init.normal_(m.weight, 0, weight_std)
+    return net
+
+xb, yb = X_mn[:512], y_mn[:512]
+with torch.no_grad():
+    s0 = mnist_mlp()(xb)
+    assert abs(F.cross_entropy(s0, yb).item() - math.log(10)) < 0.1
+    print(f"log C = {math.log(10):.3f}")
+    print(f"default nn.Linear init:          {F.cross_entropy(s0, yb).item():8.3f}")
+    print(f"bug: weights ~ N(0, 1):          {F.cross_entropy(mnist_mlp(1.0)(xb), yb).item():8.3f}")
+    print(f"bug: reduction='sum':            {F.cross_entropy(s0, yb, reduction='sum').item():8.3f}   (= 512 × the mean)")
+    print(f"bug: softmax applied twice:      {F.cross_entropy(s0.softmax(1), yb).item():8.3f}   (passes the check)")
+""")
+
+md(r"""
+The double softmax passes the step-0 check, because the softmax of probabilities in $[0,1]$ is again almost uniform. It shows up in training: the second softmax only sees inputs in $[0,1]$, so even a perfect prediction (1 for the true class, 0 elsewhere) has a loss floor $-\log\frac{e}{e + (C-1)}$.
+""")
+
+code(r"""
+def train_mnist(double_softmax, steps=300):
+    net = mnist_mlp()
+    opt = torch.optim.Adam(net.parameters(), lr=1e-3)
+    g = torch.Generator().manual_seed(0)
+    for _ in range(steps):
+        i = torch.randint(0, len(X_mn), (128,), generator=g)
+        s = net(X_mn[i])
+        loss = F.cross_entropy(s.softmax(1) if double_softmax else s, y_mn[i])
+        opt.zero_grad(); loss.backward(); opt.step()
+    return loss.item()
+
+C = 10
+floor = -math.log(math.e / (math.e + C - 1))  # @student: floor = ...  # TODO: the loss of a perfect one-hot prediction after a second softmax
+print(f"after 300 Adam steps: correct loss {train_mnist(False):.3f} | softmax twice {train_mnist(True):.3f} (floor {floor:.3f})")
+""")
+
+md(r"""
+- Default init: 2.317 vs $\log 10 = 2.303$. Weights $\sim\mathcal N(0,1)$: 430, logits are huge and confidently wrong. `reduction='sum'`: 1,186 = 512 × 2.317, so the loss (and the gradient) scales with the batch size.
+- Softmax twice: 2.302 at step 0, but after 300 steps the loss is stuck at 1.539, just above its floor $\log(1 + 9/e) = 1.461$, while the correct model reaches 0.137. `nn.CrossEntropyLoss` / `F.cross_entropy` expect logits; the model must not end with a softmax.
 """)
 
 md(r"""

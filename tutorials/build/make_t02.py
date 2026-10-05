@@ -114,6 +114,50 @@ The gradients come for free: `unfold`, `view` and `@` are all differentiable, so
 """)
 
 md(r"""
+**Practical note: transposed convolution is the gradient of convolution**
+
+In im2col form a conv is $y = Wx$ for a sparse matrix $W$, so the gradient w.r.t. the input is $W^\top \frac{\partial L}{\partial y}$. `F.conv_transpose2d(g, w)` multiplies by exactly that $W^\top$, with the same `w`, stride and padding: it is the conv's backward pass used as a forward layer (the "deconvolution" upsampler of segmentation nets and GAN generators). Each input pixel of a stride-$s$, $K\times K$ transposed conv paints a $K\times K$ patch, and patches are placed $s$ apart. When $s$ does not divide $K$, some output pixels are covered by more patches than others: the **checkerboard artifact** (Odena et al., 2016).
+""")
+
+code(r"""
+torch.manual_seed(0)
+for S, P in [(1, 1), (2, 1)]:
+    x = torch.randn(2, 4, 9, 9, dtype=torch.float64, requires_grad=True)
+    w = torch.randn(6, 4, 3, 3, dtype=torch.float64)
+    y = F.conv2d(x, w, stride=S, padding=P)
+    g = torch.randn_like(y)                                   # an upstream gradient dL/dy
+    dx, = torch.autograd.grad(y, x, g)
+    out_pad = (x.shape[-1] + 2 * P - 3) % S                   # stride 2 maps 9 and 10 to the same size; this picks 9
+    #>> the same dL/dx with one call to F.conv_transpose2d (same w, stride, padding; output_padding=out_pad)
+    dx_t = F.conv_transpose2d(g, w, stride=S, padding=P, output_padding=out_pad)
+    #<<
+    print(f"stride {S}: y {tuple(y.shape)}, dL/dx {tuple(dx.shape)};  max |autograd − conv_transpose2d| = {(dx - dx_t).abs().max().item():.1e}")
+""")
+
+code(r"""
+const = torch.ones(1, 1, 8, 8)
+ups = {
+    "transposed conv, K=3, stride 2": F.conv_transpose2d(const, torch.ones(1, 1, 3, 3), stride=2, padding=1, output_padding=1),
+    "transposed conv, K=4, stride 2": F.conv_transpose2d(const, torch.ones(1, 1, 4, 4), stride=2, padding=1),
+    "nearest resize ×2, then 3x3 conv": F.conv2d(F.interpolate(const, scale_factor=2, mode="nearest"), torch.ones(1, 1, 3, 3), padding=1),
+}
+fig, ax = plt.subplots(1, 3, figsize=(12, 3.6))
+for a, (name, o) in zip(ax, ups.items()):
+    inner = o[0, 0, 2:-2, 2:-2]                               # ignore the 2-pixel border (padding effects)
+    print(f"{name:34s} out {tuple(o.shape[2:])}, interior values {sorted(inner.unique().tolist())}")
+    im = a.imshow(o[0, 0], cmap="gray"); plt.colorbar(im, ax=a)
+    a.set(title=f"{name}\n(input: constant 8x8)", xlabel="x", ylabel="y")
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+- The two gradients agree exactly (difference 0.0) at stride 1 and 2. At stride 2 the forward conv maps both 9×9 and 10×10 inputs to 5×5, so the transpose needs `output_padding` to know which size to return.
+- **K=3, stride 2** on a constant input: interior values 1, 2 and 4 in a regular pattern. Odd output pixels receive 2 kernel taps per axis, even ones 1, so the product over the two axes gives 4, 2 or 1 overlaps.
+- **K=4, stride 2**: every interior pixel is covered exactly twice per axis, a constant 4. **Nearest resize ×2, then a 3×3 conv**: a constant 9. Both artifacts left are at the 1-pixel border (padding).
+- With learned weights a K=4 transposed conv can still produce a checkerboard (the taps that land on even and on odd pixels need not sum to the same value); resize-then-conv cannot, which is why Odena et al. recommend it for decoders and generators.
+""")
+
+md(r"""
 **Past exam question (Moed B, 2026), backpropagation**
 
 A 1-D ConvNet without nonlinearities. Figure, in words: five inputs $x_1,\dots,x_5$; a conv layer with a single filter $w=(w_1,w_2,w_3)$, no bias (stride 1, no padding), gives three outputs
@@ -523,6 +567,61 @@ md(r"""
 After 5 epochs on 10k images the width-16 ResNet-18 (0.70M parameters) reaches **62.8%** test accuracy (66.1% on training images), and both curves are still rising: this is an underfitted run limited by compute, not by data. On an Apple-silicon GPU (mps) the training took about a minute; on a 2-thread laptop CPU expect about 5–6 minutes, and numbers that differ by about one point (61.9% in our CPU run), since CPU and GPU kernels round differently.
 
 ✏️ Train once more with `augment` replaced by the identity. With only 10k images, which gap grows: train accuracy minus test accuracy, or the test accuracy itself?
+""")
+
+md(r"""
+**Practical note: dead ReLUs**
+
+A ReLU unit whose pre-activation is $\le 0$ for every input outputs 0 and has gradient 0, so its incoming weights never receive a gradient again: it is dead for good. One oversized SGD step can push a unit's bias and weights there. BatchNorm protects the ResNet above (it re-centres every channel), so we use a small CNN without BN: conv(32)–pool–conv(64)–pool–FC(128)–FC(10), SGD with momentum 0.9, 300 steps on the same 10k images, $\eta = 0.05$ vs $\eta = 0.5$. A unit (a conv channel or an FC neuron) counts as dead if it is $\le 0$ at every position of 1,000 held-out test images.
+""")
+
+code(r"""
+def small_cnn():
+    return nn.Sequential(nn.Conv2d(3, 32, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+                         nn.Conv2d(32, 64, 3, 1, 1), nn.ReLU(), nn.MaxPool2d(2),
+                         nn.Flatten(), nn.Linear(64 * 8 * 8, 128), nn.ReLU(), nn.Linear(128, 10)).to(device)
+
+@torch.no_grad()
+def dead_fraction(net, x):
+    acts = []
+    hooks = [m.register_forward_hook(lambda m, i, o: acts.append(o)) for m in net if isinstance(m, nn.ReLU)]
+    net(x)
+    for h in hooks: h.remove()
+    fracs = []
+    for a in acts:
+        #>> per unit (channel for N×C×H×W, neuron for N×C): dead if its max over the batch (and positions) is ≤ 0
+        per_unit_max = a.transpose(0, 1).reshape(a.shape[1], -1).max(1).values
+        fracs.append((per_unit_max <= 0).float().mean().item())
+        #<<
+    return fracs
+
+dead_res = {}
+for lr in [0.05, 0.5]:
+    torch.manual_seed(0)
+    cnn = small_cnn()
+    opt_c = torch.optim.SGD(cnn.parameters(), lr=lr, momentum=0.9)
+    gen = torch.Generator().manual_seed(0)
+    for step in range(300):
+        bi = torch.randint(0, N_TRAIN, (BATCH,), generator=gen)
+        loss = F.cross_entropy(cnn(x_train[bi].to(device)), y_train[bi].to(device))
+        opt_c.zero_grad(); loss.backward(); opt_c.step()
+    held = x_test[:1000].to(device)
+    fr = dead_fraction(cnn, held)
+    # check: a dead FC unit gets exactly zero gradient on its incoming weights
+    opt_c.zero_grad(); F.cross_entropy(cnn(held), y_test[:1000].to(device)).backward()
+    zero_rows = (cnn[7].weight.grad.abs().sum(1) == 0).float().mean().item()
+    assert abs(zero_rows - fr[2]) < 1e-6
+    with torch.no_grad():
+        acc = (cnn(held).argmax(1).cpu() == y_test[:1000]).float().mean().item()
+    dead_res[lr] = fr
+    print(f"lr {lr}: dead units  conv1 {fr[0]:.1%}  conv2 {fr[1]:.1%}  fc {fr[2]:.1%} | FC rows with zero gradient {zero_rows:.1%} | "
+          f"final batch loss {loss.item():.3f} | held-out acc {acc:.3f}")
+""")
+
+md(r"""
+- $\eta = 0.05$: no dead conv channels, and 9.4% of the 128 FC units dead: some dying happens even at a normal learning rate. Held-out accuracy 0.56 after 300 steps.
+- $\eta = 0.5$: 83% of the conv2 channels and **all** 128 FC units are dead. The logits are then the last layer's bias alone, the same for every image: loss 2.30 = $\log 10$, accuracy 0.107 (chance). Nothing can recover, because every dead FC unit has exactly zero gradient on its incoming weights (the check: the fraction of zero-gradient rows equals the dead fraction).
+- Remedies: a lower or warmed-up learning rate, BatchNorm, Kaiming init, or an activation with a non-zero gradient for negative inputs (LeakyReLU, GELU). Count dead units on a held-out batch whenever a ReLU network stalls at the initial loss.
 """)
 
 md(r"""
