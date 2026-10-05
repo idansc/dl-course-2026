@@ -765,6 +765,96 @@ md(r"""
 """)
 
 md(r"""
+**Practical note: evaluation is fragile, the question format changes the score**
+
+The same multiple-choice benchmark can be scored in two standard ways. **MMLU-style** (multiple-choice format): list the options as `A. … B. …`, end with `Answer:`, and take the letter with the highest next-token probability. **Cloze**: show only the question and pick the option whose *text* has the highest log-likelihood as a continuation, $\sum_t \log p(a_t \mid q, a_{<t})$. MMLU-style needs the model to have learned the symbol-binding skill "letter ↔ option"; cloze does not. We score 100 ARC-Easy questions (4 options; with ~40 the standard error would be ±8 points) both ways, with the 0.5B Qwen model above and the base `SmolLM2-135M`, same plain-text prompts for both.
+""")
+
+code(r"""
+arc = load_dataset("allenai/ai2_arc", "ARC-Easy", split="test")
+arc4 = [r for r in arc if r["choices"]["label"] == list("ABCD")]
+mcq = [arc4[i] for i in random.Random(0).sample(range(len(arc4)), 100)]
+gold_mc = np.array(["ABCD".index(r["answerKey"]) for r in mcq])
+
+def mmlu_prompt(r):
+    return f"Question: {r['question']}\n" + "".join(f"{l}. {t}\n" for l, t in zip("ABCD", r["choices"]["text"])) + "Answer:"
+
+def cloze_prompt(r):
+    return f"Question: {r['question']}\nAnswer:"
+
+@torch.no_grad()
+def continuation_logprobs(model, tokenizer, context, continuations):
+    # sum of log p(continuation tokens | context), one forward pass for all options (right-padded)
+    ctx = tokenizer(context).input_ids
+    conts = [tokenizer(" " + c).input_ids for c in continuations]
+    L = len(ctx) + max(len(c) for c in conts)
+    ids = torch.zeros(len(conts), L, dtype=torch.long); att = torch.zeros(len(conts), L, dtype=torch.long)
+    for i, c in enumerate(conts):
+        ids[i, :len(ctx) + len(c)] = torch.tensor(ctx + c); att[i, :len(ctx) + len(c)] = 1
+    logp = model(input_ids=ids.to(device), attention_mask=att.to(device)).logits.float().log_softmax(-1).cpu()
+    out = []
+    for i, c in enumerate(conts):
+        #>> the logits at position p predict token p+1: sum the log-probs of the continuation tokens c (positions len(ctx) … len(ctx)+len(c)−1)
+        pos = torch.arange(len(ctx) - 1, len(ctx) + len(c) - 1)
+        out.append(logp[i, pos, torch.tensor(c)].sum().item())
+        #<<
+    return out
+
+@torch.no_grad()
+def score_formats(model, tokenizer):
+    letters = [tokenizer(" " + l).input_ids for l in "ABCD"]
+    assert all(len(t) == 1 for t in letters)                       # " A" … " D" are single tokens
+    letters = [t[0] for t in letters]
+    pred_mmlu, pred_cloze = [], []
+    for r in mcq:
+        ids = tokenizer(mmlu_prompt(r), return_tensors="pt").input_ids.to(device)
+        pred_mmlu.append(model(ids).logits[0, -1, letters].argmax().item())
+        pred_cloze.append(int(np.argmax(continuation_logprobs(model, tokenizer, cloze_prompt(r), r["choices"]["text"]))))
+    return (np.array(pred_mmlu) == gold_mc).mean(), (np.array(pred_cloze) == gold_mc).mean()
+
+# check: our continuation log-prob equals −(HF loss × number of continuation tokens) with the context masked out
+r0 = mcq[0]
+ctx0, c0 = lm_tok(cloze_prompt(r0)).input_ids, lm_tok(" " + r0["choices"]["text"][0]).input_ids
+x0 = torch.tensor([ctx0 + c0], device=device)
+with torch.no_grad():
+    hf = -lm(input_ids=x0, labels=torch.tensor([[-100] * len(ctx0) + c0], device=device)).loss.item() * len(c0)
+ours = continuation_logprobs(lm, lm_tok, cloze_prompt(r0), r0["choices"]["text"][:1])[0]
+print(f"continuation log-prob: ours {ours:.5f}   HF {hf:.5f}   diff {abs(ours - hf):.1e}")
+
+t = time.time()
+smol_name = "HuggingFaceTB/SmolLM2-135M"
+smol_tok = AutoTokenizer.from_pretrained(smol_name)
+smol = AutoModelForCausalLM.from_pretrained(smol_name, dtype=torch.float32).to(device).eval()
+fmt_scores = {"Qwen2.5-0.5B-Instruct": score_formats(lm, lm_tok), "SmolLM2-135M (base)": score_formats(smol, smol_tok)}
+del smol
+se = lambda p: math.sqrt(p * (1 - p) / len(mcq))
+print(f"scored {len(mcq)} questions × 2 formats × 2 models in {time.time() - t:.0f}s   (chance = 0.25)")
+for name, (a_mmlu, a_cloze) in fmt_scores.items():
+    print(f"{name:24s} MMLU-style {a_mmlu:.2f} ± {se(a_mmlu):.2f}   cloze {a_cloze:.2f} ± {se(a_cloze):.2f}")
+
+plt.figure(figsize=(6, 3.5))
+xs, w = np.arange(2), 0.35
+for i, (name, accs) in enumerate(fmt_scores.items()):
+    plt.bar(xs + (i - 0.5) * w, accs, w, yerr=[se(a) for a in accs], capsize=3, label=name)
+plt.axhline(0.25, color="gray", ls=":", label="chance")
+plt.xticks(xs, ["MMLU-style (letter)", "cloze (answer text)"]); plt.ylabel("accuracy"); plt.ylim(0, 1)
+plt.title(f"ARC-Easy, {len(mcq)} questions: same models, two formats"); plt.legend(fontsize=8); plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+<<SOLUTION>>
+Same 100 questions, same models, two formats. MMLU-style: Qwen2.5-0.5B 0.75, SmolLM2-135M 0.31 (chance 0.25 is within its standard error), a 44-point gap. Cloze: 0.59 vs 0.55, a 4-point gap, inside one standard error of the difference (≈0.07). The base 135M model knows the answer text about as often as the 0.5B instruct model; it has not learned to map an answer to a letter. The format also moves Qwen by 16 points in the other direction. The ranking does not flip here, but the size of the gap, the headline of a model comparison, is set by the scoring choice. (Our continuation log-prob matches the HF loss to ~1e-6.)
+<</SOLUTION>>
+<<STUDENT>>
+Compare the gap between the two models under each format. Which model depends more on the format, and why?
+<</STUDENT>>
+
+**Contamination and Goodhart.** Benchmark questions leak into web-scale pretraining data, so a high score can be recall of the test set rather than skill; and once a number is the target for model selection, formats, prompts and few-shot examples get tuned until it stops measuring the skill. Biderman et al. (2024, *Lessons from the Trenches on Reproducible Evaluation of Language Models*) therefore ask for the exact prompts and scoring code (lm-evaluation-harness) with every number, and comparisons only under one setup.
+
+✏️ Add length normalization to the cloze score (divide each option's log-likelihood by its number of characters, lm-evaluation-harness's `acc_norm`). Does the ranking of the two models change again?
+""")
+
+md(r"""
 ## 7. If time: a cross-encoder reranker
 
 Second stage of retrieval: rerank BM25's top 10 with `cross-encoder/ms-marco-MiniLM-L6-v2`, which reads query and passage *together* (full cross-attention between them) and outputs one relevance logit. 10 forward passes per query instead of one matrix product, so it only runs on a short list. Recall@10 of the first stage caps what reranking can reach.

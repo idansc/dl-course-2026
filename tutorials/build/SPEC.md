@@ -43,7 +43,7 @@ A tutorial = **(a) a short slide recap** (10–15 min, selected pages of that we
 
 ## Build and verify (mandatory)
 ```bash
-PY=/private/tmp/claude-501/-Users-idanschwartz-Library-CloudStorage-OneDrive-BarIlanUniversity-playground/bb5fb5c5-72a5-41d3-b3fc-41e1b89dd2e2/scratchpad/tut/bin
+PY=~/projects/dl-course-2026/.venv/bin
 cd ~/projects/dl-course-2026/tutorials
 OMP_NUM_THREADS=2 $PY/python build/make_tNN.py
 OMP_NUM_THREADS=2 $PY/jupyter nbconvert --to notebook --execute --inplace \

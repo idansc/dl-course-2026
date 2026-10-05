@@ -756,6 +756,110 @@ Majority vote (maj@8) stays within a few points of pass@1 (0.39 vs 0.38 and 0.64
 """)
 
 md(r"""
+**Practical note: chain-of-thought decoding (Wang & Zhou, 2024)**
+
+Correct reasoning paths often exist in a model's distribution but are not the greedy one. CoT decoding branches on the top-$k$ candidates for the **first** response token and continues each branch greedily: $k$ deterministic answers, no prompt engineering, no sampling. To pick a branch without the answer key, use the model's **answer confidence**: the mean over the answer's tokens of $p(\text{top-1}) - p(\text{top-2})$. The paper finds paths that contain a CoT end with a more confident answer. We test it on the original `SmolLM2-135M-Instruct` (not our SFT/GRPO model, which was trained to answer in one line) with 10 one- or two-step word problems, $k=5$, 96 new tokens per branch.
+""")
+
+code(r"""
+cot_model = AutoModelForCausalLM.from_pretrained(MODEL, dtype=torch.float32).to(device).eval()
+WORD_PROBLEMS = [
+    ("Tom has 3 apples. He buys 5 more apples. How many apples does Tom have now?", 8),
+    ("A box has 12 pencils. Sara takes 4 pencils. How many pencils are left in the box?", 8),
+    ("There are 6 birds on a tree. 3 more birds come. Then 2 birds fly away. How many birds are on the tree?", 7),
+    ("Anna has 4 bags with 5 candies in each bag. How many candies does she have?", 20),
+    ("A shirt costs 7 dollars. How much do 3 shirts cost?", 21),
+    ("Ben is 9 years old. His sister is 4 years older. How old is his sister?", 13),
+    ("A farmer has 10 cows and sells 3. Then he buys 6 more. How many cows does he have?", 13),
+    ("Mia read 15 pages on Monday and 20 pages on Tuesday. How many pages did she read in total?", 35),
+    ("I have 2 boxes with 6 eggs each and I eat 3 eggs. How many eggs are left?", 9),
+    ("A class has 14 girls and 11 boys. How many students are in the class?", 25)]
+
+def extract_answer(text):
+    # the number after '####' / 'answer is' if the model wrote one, else the last number; returns (value, char span)
+    m = re.search(r"(?:####|answer is:?)\s*\$?(-?\d+)", text)
+    if m: return int(m.group(1)), m.span(1)
+    nums = list(re.finditer(r"-?\d+", text))
+    return (int(nums[-1].group()), nums[-1].span()) if nums else (None, None)
+
+@torch.no_grad()
+def cot_decode(question, k=5, max_new=96):
+    ids = tok(tok.apply_chat_template([{"role": "user", "content": question}], tokenize=False, add_generation_prompt=True),
+              return_tensors="pt").input_ids.to(device)
+    first = cot_model(ids).logits[0, -1].softmax(-1).topk(k)                 # top-k first tokens; branch 0 = greedy
+    x = torch.cat([ids.repeat(k, 1), first.indices[:, None]], 1)
+    out = cot_model.generate(x, attention_mask=torch.ones_like(x), max_new_tokens=max_new, do_sample=False,
+                             output_scores=True, return_dict_in_generate=True, pad_token_id=EOS)
+    probs = torch.stack(out.scores, 1).softmax(-1)                          # (k, steps, vocab): step t predicts token t+1
+    #>> margin (k, steps): probability of the top-1 token minus that of the top-2 token, at every generated step
+    top2 = probs.topk(2, -1).values
+    margin = (top2[..., 0] - top2[..., 1]).cpu()
+    #<<
+    branches = []
+    for b in range(k):
+        toks = out.sequences[b, ids.shape[1]:].tolist()
+        toks = toks[:toks.index(EOS)] if EOS in toks else toks
+        text = tok.decode(toks)
+        ans, span = extract_answer(text)
+        conf = 0.0
+        if ans is not None:                                                 # tokens 1.. overlapping the answer's characters
+            ends = [len(tok.decode(toks[:i + 1])) for i in range(len(toks))]
+            idx = [i for i in range(1, len(toks)) if ends[i] > span[0] and ends[i - 1] < span[1]]
+            conf = margin[b, [i - 1 for i in idx]].mean().item() if idx else 0.0
+        branches.append(dict(first=tok.decode(first.indices[b]), p_first=first.values[b].item(), text=text, answer=ans, conf=conf))
+    return branches
+
+t0 = time.time()
+cot = [(q, a, cot_decode(q)) for q, a in WORD_PROBLEMS]
+print(f"{len(cot)} problems × 5 branches in {time.time() - t0:.0f}s\n")
+for q, a, br in cot:
+    print(f"{q[:60]:60s} gold {a:3d} | " + "  ".join(f"{b['first'].strip()!r}:{b['answer']}({b['conf']:.2f})" for b in br))
+""")
+
+code(r"""
+import collections
+# check: branch 0 is plain greedy decoding
+q0 = WORD_PROBLEMS[0][0]
+ids0 = tok(tok.apply_chat_template([{"role": "user", "content": q0}], tokenize=False, add_generation_prompt=True), return_tensors="pt").input_ids.to(device)
+g0 = cot_model.generate(ids0, attention_mask=torch.ones_like(ids0), max_new_tokens=96, do_sample=False, pad_token_id=EOS)[0, ids0.shape[1]:].tolist()
+print("branch 0 == greedy decoding:", tok.decode(g0[:g0.index(EOS)] if EOS in g0 else g0) == cot[0][2][0]["text"])
+
+greedy_ok = np.array([br[0]["answer"] == a for _, a, br in cot])
+any_ok = np.array([any(b["answer"] == a for b in br) for _, a, br in cot])
+conf_ok = np.array([max(br, key=lambda b: b["conf"])["answer"] == a for _, a, br in cot])
+def conf_vote(br):                                  # the paper's aggregation: sum the confidence of branches with the same answer
+    tot = collections.Counter()
+    for b in br:
+        if b["answer"] is not None: tot[b["answer"]] += b["conf"]
+    return tot.most_common(1)[0][0] if tot else None
+vote_ok = np.array([conf_vote(br) == a for _, a, br in cot])
+n_p = len(cot)
+print(f"greedy {greedy_ok.sum()}/{n_p}   correct answer in some branch {any_ok.sum()}/{n_p}   "
+      f"max-confidence branch {conf_ok.sum()}/{n_p}   confidence-weighted vote {vote_ok.sum()}/{n_p}")
+conf_right = [b["conf"] for _, a, br in cot for b in br if b["answer"] == a]
+conf_wrong = [b["conf"] for _, a, br in cot for b in br if b["answer"] is not None and b["answer"] != a]
+print(f"mean answer confidence: correct branches {np.mean(conf_right):.2f} (n={len(conf_right)}), wrong branches {np.mean(conf_wrong):.2f} (n={len(conf_wrong)})")
+
+ex = next(i for i in range(n_p) if not greedy_ok[i] and any_ok[i])
+q, a, br = cot[ex]
+right = next(b for b in br if b["answer"] == a)
+print(f"\nQ: {q}  (gold {a})\n--- greedy (first token {br[0]['first']!r}, p={br[0]['p_first']:.2f}), answer {br[0]['answer']}, conf {br[0]['conf']:.2f}:\n{br[0]['text']}")
+print(f"--- branch starting with {right['first']!r} (p={right['p_first']:.2f}), answer {right['answer']}, conf {right['conf']:.2f}:\n{right['text']}")
+del cot_model
+""")
+
+md(r"""
+<<SOLUTION>>
+- Greedy solves 2 of 10 problems; the correct answer is in at least one of the 5 branches for 8 of 10. Unlike the paper's base models, this instruct model writes a derivation on most paths already, greedy included (its `#### N / The answer is: N` endings come from GSM8K-style instruction data); the branches differ in whether the arithmetic along the path is right. In the example above, greedy computes 4 − 12 = 2; the branch that starts with "If" (probability 0.04 for that first token) writes 12 − 4 = 8.
+- The confidence heuristic helps only partly at 135M. Correct branches have a higher mean answer margin (0.97 vs 0.84), but many wrong answers are also emitted with margin ≈ 1.00 (e.g. 80 candies, 196 students), so the max-confidence branch is right on 4/10 and the confidence-weighted vote over branches (the paper's aggregation) on 5/10: better than greedy (2/10), well below the oracle (8/10). The paper evaluates 7B-and-larger models and reports a much cleaner separation there.
+- Cost: $k$ greedy decodes per question, no sampling and no prompt change. It is the same pass@k vs picking gap as above: the right answer is in the distribution; choosing it without a key is the hard part.
+<</SOLUTION>>
+<<STUDENT>>
+How often is the correct answer among the 5 branches vs greedy? Does the answer-confidence margin pick the right branch?
+<</STUDENT>>
+""")
+
+md(r"""
 **Past exam question (Moed B, 2026)**
 
 What are the main difficulties in training **reasoning** models with standard **supervised learning**? Explain how training with **Reinforcement Learning (RL)** helps to deal with these difficulties. Refer to the type of **reward** commonly used in training such models.

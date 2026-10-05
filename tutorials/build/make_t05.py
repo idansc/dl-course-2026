@@ -386,6 +386,60 @@ Formula and counter agree exactly (the counter does not count the softmax, which
 """)
 
 md(r"""
+**Practical note: FlashAttention is exact, via the online softmax**
+
+FlashAttention does not approximate the softmax; it reorders it. Each query row keeps a running max $m$, a running sum $\ell$ and an unnormalized output $o$, and visits $K,V$ one block at a time. For a new block of scores $s_j$:
+$$m' = \max\big(m, \max_j s_j\big),\qquad \ell' = e^{m-m'}\,\ell + \sum_j e^{s_j-m'},\qquad o' = e^{m-m'}\,o + \sum_j e^{s_j-m'}\,v_j,$$
+and the output is $o/\ell$ after the last block. The factor $e^{m-m'}$ rescales everything accumulated under the old max, so the result equals $\mathrm{softmax}(QK^\top/\sqrt d)V$ up to float rounding, while only one $B\times B$ tile of scores exists at a time. Subtracting the running max also keeps $e^{s}$ from overflowing.
+""")
+
+code(r"""
+def flash_attention(q, k, v, block=128, causal=False):
+    # q, k, v: (batch, heads, T, d). Query tiles of `block` rows, K/V tiles of `block` columns.
+    T, d = q.shape[-2], q.shape[-1]
+    out = torch.empty_like(q)
+    for i in range(0, T, block):
+        qi = q[..., i:i + block, :] / math.sqrt(d)
+        m = torch.full(qi.shape[:-1] + (1,), float("-inf"))     # running max per row
+        l = torch.zeros(qi.shape[:-1] + (1,))                   # running sum of exp
+        o = torch.zeros_like(qi)                                # running unnormalized output
+        for j in range(0, min(i + block, T) if causal else T, block):   # causal: skip tiles entirely in the future
+            s = qi @ k[..., j:j + block, :].transpose(-2, -1)  # one (block × block) tile of scores
+            if causal and j + block > i:
+                rows = torch.arange(i, i + s.shape[-2])[:, None]; cols = torch.arange(j, j + s.shape[-1])[None]
+                s = s.masked_fill(cols > rows, float("-inf"))
+            #>> online-softmax update: new max m_new, rescale factor exp(m − m_new), update l and o with this tile, then m = m_new
+            m_new = torch.maximum(m, s.amax(-1, keepdim=True))
+            p = torch.exp(s - m_new)
+            corr = torch.exp(m - m_new)
+            l = l * corr + p.sum(-1, keepdim=True)
+            o = o * corr + p @ v[..., j:j + block, :]
+            m = m_new
+            #<<
+        out[..., i:i + block, :] = o / l
+    return out
+
+torch.manual_seed(0)
+Bf, Hf, Tf, Df, blk = 2, 4, 1024, 64, 128
+qf, kf, vf = torch.randn(3, Bf, Hf, Tf, Df).unbind(0)
+for causal in (False, True):
+    diff = (flash_attention(qf, kf, vf, blk, causal) - F.scaled_dot_product_attention(qf, kf, vf, is_causal=causal)).abs().max().item()
+    print(f"causal={causal!s:5}: max |blocked − F.scaled_dot_product_attention| = {diff:.1e}")
+    assert diff < 1e-5
+q_big = 30 * qf                                    # logits up to ~10^3: a naive exp overflows
+print(f"large logits: naive exp(max score) = {torch.exp((q_big[0, 0] @ kf[0, 0].T / 8).max()).item()},  "
+      f"max |blocked − SDPA| = {(flash_attention(q_big, kf, vf, blk) - F.scaled_dot_product_attention(q_big, kf, vf)).abs().max().item():.1e}")
+full_mb, tile_mb = Bf * Hf * Tf * Tf * 4 / 1e6, Bf * Hf * blk * blk * 4 / 1e6
+state_mb = Bf * Hf * blk * (Df + 2) * 4 / 1e6
+print(f"score matrix never materialized: {full_mb:.1f} MB (B·H·T²·4 bytes); one tile {tile_mb:.2f} MB ({full_mb / tile_mb:.0f}× less), "
+      f"plus m, l, o for one query tile {state_mb:.2f} MB")
+""")
+
+md(r"""
+The blocked version matches PyTorch's fused kernel to ~1e-6 with and without the causal mask, and stays exact when the logits are large enough that $e^{s}$ alone is `inf` in fp32. At $T=1024$ the $T\times T$ scores of 2×4 heads would take 34 MB; the loop never holds more than one 0.5 MB tile (64× less, and the ratio grows as $T^2/B^2$). The FLOPs are the same as standard attention; the saving is memory traffic: on a GPU the tile and $m,\ell,o$ live in SRAM, and the scores are never written to HBM. The backward pass recomputes the tiles instead of storing them. In Python this loop is slower than the fused kernel; the point is the algorithm, not the speed.
+""")
+
+md(r"""
 ## 4. KV cache
 
 Without a cache, generating token $t+1$ runs the whole prefix of length $t$ through the model again: $O(t)$ work per token, $O(n^2)$ for $n$ tokens.
@@ -731,7 +785,63 @@ except Exception as e:
 """)
 
 md(r"""
-The logits move in the second or third digit, the loss in the third or fourth: that is bf16's precision, and it does not matter for training. Now timing, a forward pass over a batch of 16×256 tokens:
+The logits move in the second or third digit, the loss in the third or fourth: that is bf16's precision, and it does not matter for training.
+
+**Practical note: fp16 overflows, bf16 does not**
+
+fp16 has 5 exponent bits: its largest value is 65,504 and its smallest normal number $6.1\cdot10^{-5}$. bf16 keeps fp32's 8 exponent bits (same range, ~$3.4\cdot10^{38}$) and pays with precision (7 mantissa bits, eps $=2^{-7}$). So in fp16 a sum of squares or an unshifted exp overflows to `inf`, and small gradients underflow to 0. **Loss scaling** (`torch.amp.GradScaler`) fixes the underflow: multiply the loss by $S$ (e.g. $2^{16}$) before backward, so every gradient is $S\times$ larger in fp16, and divide by $S$ in fp32 before the optimizer step; if any gradient became `inf`, skip the step and halve $S$. bf16 needs none of this, which is why it replaced fp16 for training on A100/H100.
+""")
+
+code(r"""
+for dt in (torch.float32, torch.float16, torch.bfloat16):
+    fi = torch.finfo(dt)
+    print(f"{str(dt):15s} max {fi.max:9.3g}   smallest normal {fi.smallest_normal:9.3g}   eps {fi.eps:.3g}")
+
+# overflow: a LayerNorm-style sum of squares over 768 channels of size 20, and exp of a logit of 12 (softmax without max-subtraction)
+h = torch.full((768,), 20.0)
+for dt in (torch.float16, torch.bfloat16):
+    print(f"{str(dt):15s} sum(h²) = {(h.to(dt) ** 2).sum(dtype=dt).item():>9}   exp(12) = {torch.exp(torch.tensor(12.0, dtype=dt)).item():>9}"
+          f"   (fp32: {(h ** 2).sum().item():.0f}, {math.exp(12):.0f})")
+assert torch.isinf((h.half() ** 2).sum(dtype=torch.float16)) and torch.isfinite((h.bfloat16() ** 2).sum(dtype=torch.bfloat16))
+
+# underflow: gradients spread over 10^-10 .. 10^-2 (log-uniform), cast to fp16 with and without loss scaling
+torch.manual_seed(0)
+g = 10 ** torch.empty(100_000).uniform_(-10, -2)
+def to_fp16_grad(g, S):
+    #>> scale by S in fp32, cast to fp16 (what backward would produce), cast back to fp32 and unscale
+    return (g * S).half().float() / S
+    #<<
+for S in (1.0, 2.0 ** 16):
+    g16 = to_fp16_grad(g, S)
+    rel = ((g16 - g).abs() / g)
+    print(f"scale S = {S:>7.0f}: zeroed {(g16 == 0).float().mean():.1%}   relative error > 1%: {(rel > 0.01).float().mean():.1%}   "
+          f"max |g·S| = {(g * S).max():.3g} (fp16 max 65504)")
+print(f"bf16, no scaling: zeroed {(g.bfloat16().float() == 0).float().mean():.1%}   "
+      f"relative error > 1%: {(((g.bfloat16().float() - g).abs() / g) > 0.01).float().mean():.1%}")
+assert (to_fp16_grad(g, 2.0 ** 16) == 0).sum() < (to_fp16_grad(g, 1.0) == 0).sum()
+
+# what GradScaler does when S is too large: inf -> skip the step, halve S
+S = 2.0 ** 24
+while not torch.isfinite((g * S).half()).all():
+    print(f"S = 2^{int(math.log2(S))}: overflow (max |g·S| = {(g * S).max():.2e}) -> skip step, halve S")
+    S /= 2
+print(f"S = 2^{int(math.log2(S))}: all gradients finite")
+
+# real gradients of the mini-GPT: how many fall below fp16's normal range?
+gpt.zero_grad(set_to_none=True)
+F.cross_entropy(gpt(xb).flatten(0, 1), yb.flatten()).backward()
+ga = torch.cat([p.grad.flatten().abs().cpu() for p in gpt.parameters()]); gpt.zero_grad(set_to_none=True)
+ga = ga[ga > 0]
+print(f"mini-GPT gradients: median |g| = {ga.median():.1e}; below fp16 smallest normal: {(ga < 6.1e-5).float().mean():.1%}; "
+      f"flushed to 0 in fp16: {(ga.half() == 0).float().mean():.2%}")
+""")
+
+md(r"""
+In fp16, 768 activations of size 20 already overflow the sum of squares ($307{,}200 > 65{,}504$), and so does $e^{12}$; bf16 returns both, rounded to 3 significant digits. Without scaling, 31% of gradients spread over $10^{-10}..10^{-2}$ become exactly 0 in fp16 and 51% lose more than 1% of their value (subnormals); with $S=2^{16}$ none are lost, and the largest scaled gradient (655) is still far from 65,504. Too large an $S$ overflows instead, which is what GradScaler's skip-and-halve loop detects.
+
+On the mini-GPT's own gradients (one batch, fp32), the median $|g|$ is $1.4\cdot10^{-4}$: 26% of the entries lie below fp16's smallest normal number (kept only as subnormals, with fewer significant bits) and 0.1% flush to 0. Here the damage is mild; it grows as gradients shrink, which is why fp16 training always runs with a scaler.
+
+Now timing, a forward pass over a batch of 16×128 tokens:
 """)
 
 code(r"""
