@@ -938,4 +938,4 @@ md(r"""
 
 for k, p in B.write(STEM).items():
     print(k, p)
-print("recap", make_recap(STEM, [("slides/lectures/p2.pdf", [29, 40, 41, 42, 45, 48, 52, 54, 57, 60, 67, 68, 62, 63])]))
+print("recap", make_recap(STEM, [("slides/lectures/p2.pdf", [29, 40, 41, 42, 45, 48, 52, 54, 57, 60, 68, 69, 62, 63])]))

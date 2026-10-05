@@ -3,7 +3,7 @@ from nbkit import Builder
 from recap import make_recap
 
 make_recap("T01_neurons_to_backprop", [
-    ("slides/lectures/p1.pdf", [17, 18, 29, 30, 32]),
+    ("slides/lectures/p1.pdf", [18, 19, 29, 30, 32]),
     ("slides/lectures/p3.pdf", [11, 19, 25, 30, 35, 38, 39, 44, 49]),
 ])
 
