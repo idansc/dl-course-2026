@@ -198,6 +198,39 @@ All differences are at float64 round-off while the parameters moved by $O(1)$: t
 ✏️ `torch.optim.Adam(weight_decay=0.1)` and `torch.optim.AdamW(weight_decay=0.1)` are different algorithms. Print `max |Adam − AdamW|` after the 100 steps above. For which parameters does Adam's L2 term decay the weights less than AdamW does? (Hint: the decay is divided by $\sqrt{\hat v}$.)
 """)
 
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+A non-convex loss is optimized with SGD with momentum, using the update rule
+$$v_{t+1} = \mu v_t - \eta \nabla L(\theta_t), \qquad \theta_{t+1} = \theta_t + v_{t+1}.$$
+Which of the following statements about the role of the momentum $\mu$ are **true**? (More than one may be correct.)
+1. Momentum lets the optimizer build up velocity in the direction of consistent gradients, which helps it cross flat regions (plateaus) and damps oscillations in directions where the gradient is noisy.
+2. Momentum can be interpreted as an exponentially weighted moving average of the gradients accumulated so far.
+3. Momentum only changes the size of the current step at each iteration, and does not use gradients from previous steps at all.
+4. Momentum guarantees convergence to the global optimum, even for non-convex losses.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**1 and 2.** Unrolling the recursion from $v_0=0$ gives $v_{t+1} = -\eta\sum_{k=0}^{t}\mu^k\,\nabla L(\theta_{t-k})$: an exponentially weighted sum of all past gradients (an EMA up to the constant factor $1-\mu$), checked below. Consistent components add up (up to $1/(1-\mu)$ times the step); components that flip sign cancel, which damps oscillations and noise. (3) is false: the formula above uses every past gradient. (4) is false: momentum carries no global guarantee on a non-convex loss. On a quadratic it only improves the rate, from $1-1/\kappa$ to about $1-2/\sqrt\kappa$ (section 3.1).
+<</SOLUTION>>
+""")
+
+code(r"""
+torch.manual_seed(0)
+mu, eta, T = 0.9, 0.1, 30
+grads = torch.randn(T, 5, dtype=torch.float64)          # a sequence of gradients g_0 .. g_{T-1}
+v = torch.zeros(5, dtype=torch.float64)
+for g in grads:
+    v = mu * v - eta * g                                  # the exam's recursion
+#>> v_T written as an explicit exponentially weighted sum of all past gradients: −η Σ_k μ^k g_{T−1−k}
+v_sum = -eta * sum(mu ** k * grads[T - 1 - k] for k in range(T))
+#<<
+print("max |recursion − weighted sum| =", (v - v_sum).abs().max().item())
+print("weight of the gradient from 10 steps ago relative to the newest:", mu ** 10)
+""")
+
 # ---------------------------------------------------------------- 3. second order
 md(r"""
 ## 3. Second order: Newton vs GD, and Muon's Newton–Schulz step
@@ -277,6 +310,35 @@ The measured GD curves follow the dashed $(1-1/\kappa)^t$ bound: each 10× in $\
 <<STUDENT>>
 Compare the GD curves to the dashed $(1-1/\kappa)^t$ bound, and the number of steps GD, momentum and Newton need as $\kappa$ grows.
 <</STUDENT>>
+""")
+
+md(r"""
+**Past exam question (Moed B, 2026)**
+
+True or false: when running vanilla gradient descent on the whole dataset (no mini-batches), the loss decreases at every update step.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**False.** Full-batch GD removes the gradient noise, not the step-size problem. A decrease is guaranteed only for a small enough step: for an $L$-smooth loss, $\eta < 2/L$ (descent lemma). With a larger step the iterate overshoots along the steep directions and the loss goes up, as in the $\eta = 2.05/L$ curve above. The check counts the steps at which the loss increases on the $\kappa=100$ quadratic.
+<</SOLUTION>>
+""")
+
+code(r"""
+A, b = make_quadratic(100)
+Lmax = torch.linalg.eigvalsh(A).max().item()
+quad = lambda w: 0.5 * w @ A @ w - b @ w
+for f in [1.0, 1.9, 2.05]:
+    w = torch.zeros(20, dtype=torch.float64)
+    losses = [quad(w).item()]
+    for _ in range(300):
+        #>> one full-batch GD step with η = f / L on the quadratic, then append the loss
+        w = w - f / Lmax * (A @ w - b)
+        losses.append(quad(w).item())
+        #<<
+    ups = int((np.diff(losses) > 0).sum())
+    print(f"η = {f}/L: loss went up at {ups:3d} of 300 steps; first increase at step {int(np.argmax(np.diff(losses) > 0)) + 1 if ups else '-'};  final loss {losses[-1]:.3g}")
 """)
 
 md(r"""

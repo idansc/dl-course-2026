@@ -283,6 +283,39 @@ md(r"""
 """)
 
 md(r"""
+**Past exam question (Moed B, 2026)**
+
+True or false: in a binary classification task, one can use accuracy as the training loss, optimized with gradients, instead of binary cross-entropy, and thus obtain better results when accuracy is the only metric of interest.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**False.** Accuracy is piecewise constant in the parameters: an infinitesimal change of $w$ or $b$ flips no prediction, so its gradient is 0 almost everywhere (and undefined at the jumps). Gradient descent gets no signal. BCE is a smooth surrogate whose gradient is non-zero even for correctly classified points. The check below scans the bias of a 1-D logistic classifier.
+<</SOLUTION>>
+""")
+
+code(r"""
+g_acc = torch.Generator().manual_seed(0)
+x_acc = torch.randn(50, generator=g_acc)
+y_acc = (x_acc + 0.5 * torch.randn(50, generator=g_acc) > 0).float()
+acc_of_bias = lambda b: ((x_acc + b > 0).float() == y_acc).float().mean()
+b0 = torch.tensor(0.3, requires_grad=True)
+print("accuracy has a grad_fn?", acc_of_bias(b0).grad_fn is not None)       # the comparison cuts the graph
+#>> finite-difference derivative of the accuracy at b = 0.3 (step 1e-4), and the BCE gradient at b = 0.3 by autograd
+acc_fd = (acc_of_bias(0.3 + 1e-4) - acc_of_bias(0.3 - 1e-4)) / 2e-4
+bce_grad, = torch.autograd.grad(F.binary_cross_entropy_with_logits(x_acc + b0, y_acc), b0)
+#<<
+print(f"d accuracy / db ≈ {acc_fd.item():.3f}    d BCE / db = {bce_grad.item():.3f}")
+
+bs = torch.linspace(-2, 2, 801)
+fig, ax = plt.subplots(1, 2, figsize=(10, 3))
+ax[0].plot(bs, [acc_of_bias(b).item() for b in bs]); ax[0].set(title="accuracy vs bias: flat steps", xlabel="b", ylabel="accuracy")
+ax[1].plot(bs, [F.binary_cross_entropy_with_logits(x_acc + b, y_acc).item() for b in bs]); ax[1].set(title="BCE vs bias: smooth", xlabel="b", ylabel="BCE")
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
 ## 5. Initial weights
 
 **Background.** In 2006 the "deep learning" revival (Hinton & Salakhutdinov, lecture 1) trained deep nets by **layer-wise unsupervised pretraining** first, because deep nets trained from a random start mostly failed. Four years later, Glorot & Bengio (2010) showed that a large part of the failure was simply **the scale of the random initial weights**. Then He et al. (2015) derived the right scale for ReLU and trained a 30-layer plain network from scratch. Nobody pretrains for this reason anymore. The fix is one line: choose the init std.
@@ -358,6 +391,64 @@ PyTorch's `nn.Linear` already initializes with a Kaiming-style uniform scale, wh
 """)
 
 md(r"""
+**Past exam question (Moed C, 2026)**
+
+A researcher plans to train a very deep network (50 layers) of fully connected layers, with a sigmoid activation in every layer and random weights drawn from the standard normal distribution $\mathcal{N}(0,1)$. He finds that training barely progresses and the loss does not go down.
+
+Explain what happens in the **forward** and in the **backward** pass, and propose **two concrete changes** (one to the initialization, one to the architecture / activation function) that can fix the problem. Explain why each change helps.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+""")
+
+code(r"""
+def deep_stats(std, act, depth=50, width=256):
+    # per layer: fraction of saturated units (sigmoid(z) < 0.01 or > 0.99) and std of dL/d(layer input)
+    torch.manual_seed(0)
+    x = torch.randn(512, width, requires_grad=True)
+    inputs, sat = [], []
+    for _ in range(depth):
+        x.retain_grad(); inputs.append(x)
+        z = x @ (torch.randn(width, width) * std)
+        x = act(z)
+        #>> append the fraction of pre-activations z with sigmoid(z) < 0.01 or > 0.99
+        s = torch.sigmoid(z)
+        sat.append(((s < 0.01) | (s > 0.99)).float().mean().item())
+        #<<
+    x.backward(torch.randn_like(x))
+    return sat, [t.grad.std().item() for t in inputs]
+
+n_w = 256
+settings = {
+    "sigmoid, N(0,1)  (the exam)": (1.0, torch.sigmoid),
+    "sigmoid, Xavier 1/sqrt(n)":   (1 / math.sqrt(n_w), torch.sigmoid),
+    "sigmoid, 4 × Xavier":         (4 / math.sqrt(n_w), torch.sigmoid),
+    "tanh, Xavier":                (1 / math.sqrt(n_w), torch.tanh),
+    "ReLU, Kaiming sqrt(2/n)":     (math.sqrt(2 / n_w), torch.relu),
+}
+fig, ax = plt.subplots(figsize=(7, 3.8))
+for name, (std, act) in settings.items():
+    sat, g = deep_stats(std, act, width=n_w)
+    ax.semilogy(range(1, 51), g, label=name)
+    sat_txt = f"saturated units: layer 1 {sat[0]:.0%}, layer 50 {sat[-1]:.0%}" if act is torch.sigmoid else ""
+    print(f"{name:30s} grad std layer 1 / layer 50 = {g[0] / g[-1]:.1e}   {sat_txt}")
+ax.set(title="50 layers, width 256: gradient std per layer", xlabel="layer", ylabel="std of dL/d(layer input)"); ax.legend(fontsize=8)
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+<<SOLUTION>>
+**Forward.** With $\mathcal{N}(0,1)$ weights and $n$ inputs per unit, $\mathrm{Var}(z) = n\,\mathbb{E}[a^2]$. Sigmoid outputs are positive ($\mathbb{E}[a^2]\approx 0.3$–$0.5$), so $\mathrm{std}(z)\approx 10$ at width 256: most units sit in the flat tails of the sigmoid (the run: ~70–77% saturated), and every layer outputs an almost binary pattern.
+
+**Backward.** Every layer multiplies the gradient by $W^\top\mathrm{diag}(\sigma'(z))$, with $\sigma'\le 1/4$ and $\sigma'\approx 0$ on saturated units. The official solution says the product vanishes exponentially. That is true for narrow layers, but at width 256 the run shows the opposite: the $\mathcal{N}(0,1)$ weights are $\sqrt n$ times too large and outweigh the small $\sigma'$, so layer 1 receives a gradient ~$10^4$ times larger than layer 50. The per-layer factor is roughly $\sqrt{n\,\mathbb{E}[\sigma'(z)^2]}\approx 0.09\sqrt n$: the gradient vanishes for $n\lesssim 100$ and explodes for wider layers. Either way the gradient scale differs by orders of magnitude between layers, most units pass almost no gradient, and no single learning rate trains the network.
+
+**Fix 1 (initialization):** scale the weights with the fan-in, $\sigma^2\propto 1/n_{in}$ (Xavier/Glorot), which removes the saturation. **Plain Xavier is not enough for sigmoid, though:** in the run the gradient at layer 1 is ~$10^{-31}$ of layer 50, because $\sigma'(0)=1/4$ shrinks it ~4× per layer. Xavier assumes an activation with slope 1 at 0 (tanh). Glorot & Bengio use 4× larger weights for sigmoid; that improves it to ~$10^{-10}$, still unusable at depth 50.
+**Fix 2 (activation / architecture):** ReLU with Kaiming init $\sigma^2=2/n_{in}$ (derivative 1 on the active side, no saturation), or tanh with Xavier. In the run the gradient std changes by less than 10× over all 50 layers with either. Residual connections, or BatchNorm/LayerNorm after each layer, also work: they keep the signal scale fixed whatever the initialization.
+<</SOLUTION>>
+""")
+
+md(r"""
 ## 6. If time: BatchNorm by hand
 
 The other fix for bad scaling: normalize each feature over the batch, then let the network rescale it,
@@ -389,6 +480,77 @@ dx, dgamma, dbeta = batchnorm_backward(dy, gamma.detach(), tuple(c.detach() if t
 print("dx     max err:", (dx - x.grad).abs().max().item())
 print("dgamma max err:", (dgamma - gamma.grad).abs().max().item())
 print("dbeta  max err:", (dbeta - beta.grad).abs().max().item())
+""")
+
+md(r"""
+**Past exam question (Moed B, 2026)**
+
+Given a BatchNorm block $\hat{x} = \dfrac{x - \mu}{\sqrt{\sigma^2 + \epsilon}},\; y = \gamma \hat{x} + \beta$. Which of the following statements about $\gamma$ and $\beta$ are true? (More than one may be correct.)
+1. $\gamma$ and $\beta$ are learned parameters that apply an affine transformation after the normalization.
+2. There are values of $\gamma$ and $\beta$ for which the block implements the identity mapping.
+3. Removing $\gamma$ and $\beta$ does not change at all the space of functions the network can represent.
+4. $\gamma$ and $\beta$ affect the statistics $\mu$ and $\sigma^2$ computed during training.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**1 and 2.** (1) by definition. (2) $\gamma=\sqrt{\sigma^2+\epsilon}$, $\beta=\mu$ undo the normalization; in eval mode, with the running statistics, this is an exact identity (check below); in training mode it is exact only for the batch whose statistics were used, since $\mu_B,\sigma_B$ change from batch to batch. (3) is false: without them every BN output has mean 0 and variance 1 per feature, e.g. a following sigmoid is confined to its near-linear range. (4) is false: $\mu,\sigma^2$ are computed from $x$, before $\gamma,\beta$ are applied.
+<</SOLUTION>>
+""")
+
+code(r"""
+torch.manual_seed(0)
+bn = nn.BatchNorm1d(8)
+xb = torch.randn(64, 8) * 3 + 2
+with torch.no_grad():
+    for _ in range(200):
+        bn(xb)                                   # training mode: the running statistics converge to this batch's
+bn.eval()
+#>> set bn.weight (γ) and bn.bias (β) so that the eval-mode block is the identity
+with torch.no_grad():
+    bn.weight.copy_(torch.sqrt(bn.running_var + bn.eps)); bn.bias.copy_(bn.running_mean)
+#<<
+print("eval-mode BN with γ = sqrt(running_var + eps), β = running_mean:  max |BN(x) − x| =", (bn(xb) - xb).abs().max().item())
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+In LayerNorm the mean and variance are computed **for each example separately**, over the feature dimension; in BatchNorm they are computed over the batch dimension, for each feature separately. A Transformer with LayerNorm was trained for machine translation. At inference we translate a single sentence (batch size 1).
+
+Explain why in this case LayerNorm behaves exactly as in training, whereas BatchNorm would need a special mechanism (such as running statistics). Refer to how the statistics are computed in each case.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**LayerNorm:** $\mu,\sigma^2$ are taken over the $d$ features of each token, so they depend only on that token. A batch of 1 gives exactly the same output as the same sentence inside a training batch (check below: difference 0).
+**BatchNorm:** $\mu,\sigma^2$ of each feature are taken over the batch. With one example, $x-\mu_B=0$ and $\sigma_B^2=0$, so every output equals $\beta$ whatever the input; PyTorch refuses to run it in training mode. The output for one example also depends on which other examples share its batch. At inference BN therefore switches to running averages of $\mu,\sigma^2$ collected during training, a second code path whose statistics can drift from what the model saw (the official solution says the normalization is undefined at batch size 1; with $\epsilon>0$ it is defined but erases the input).
+<</SOLUTION>>
+""")
+
+code(r"""
+torch.manual_seed(0)
+d = 16
+batch = torch.randn(8, 5, d)                     # 8 sentences, 5 tokens, d features
+one = batch[:1]                                  # translate one sentence alone
+ln = nn.LayerNorm(d, elementwise_affine=False)
+#>> LayerNorm by hand: normalize every token over its d features (biased variance, eps = ln.eps)
+my_ln = lambda z: (z - z.mean(-1, keepdim=True)) / torch.sqrt(z.var(-1, unbiased=False, keepdim=True) + ln.eps)
+#<<
+print("my LN vs nn.LayerNorm:                       ", (my_ln(batch) - ln(batch)).abs().max().item())
+print("LN, sentence alone vs inside the batch:      ", (ln(one) - ln(batch)[:1]).abs().max().item())
+
+bn = nn.BatchNorm1d(d).train()
+flat = batch.reshape(-1, d)                      # BN over all tokens of the batch, per feature
+x1 = one[0, :1]                                  # a single example
+try:
+    bn(x1)
+except ValueError as e:
+    print("BN, single example, train mode → ValueError:", e)
+print("by hand, single example: max |x − μ_B| =", (x1 - x1.mean(0)).abs().max().item(), "→ output = β for any input")
+print("BN, sentence alone vs inside the batch:      ", (bn(one[0]) - bn(flat)[:5]).abs().max().item())
 """)
 
 md(r"""

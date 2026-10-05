@@ -114,6 +114,47 @@ The gradients come for free: `unfold`, `view` and `@` are all differentiable, so
 """)
 
 md(r"""
+**Past exam question (Moed B, 2026), backpropagation**
+
+A 1-D ConvNet without nonlinearities. Figure, in words: five inputs $x_1,\dots,x_5$; a conv layer with a single filter $w=(w_1,w_2,w_3)$, no bias (stride 1, no padding), gives three outputs
+$$z_1 = w_1x_1+w_2x_2+w_3x_3,\quad z_2 = w_1x_2+w_2x_3+w_3x_4,\quad z_3 = w_1x_3+w_2x_4+w_3x_5;$$
+two average nodes $v_1 = \frac{z_1+z_2}{2}$, $v_2=\frac{z_2+z_3}{2}$; a fully connected output $\hat y = a_1v_1 + a_2v_2$. The loss is
+$$L = \tfrac12(y-\hat y)^2 + \tfrac{\lambda}{2}\big(a_1^2+a_2^2+w_1^2+w_2^2+w_3^2\big),\qquad \lambda>0.$$
+**(a)** Using backpropagation, give algebraic expressions for $\frac{\partial L}{\partial \hat y}$, $\frac{\partial L}{\partial a_1}$, $\frac{\partial L}{\partial a_2}$, $\frac{\partial L}{\partial z_2}$, $\frac{\partial L}{\partial w_2}$.
+**(b)** At some point during training: $y=1,\ \hat y=3,\ a_1=a_2=1,\ x_2=1,\ x_3=0,\ x_4=1$, $\lambda=0.5$ and $w_2=-2$. To decrease the loss, should $w_2$ move toward $-3$ or toward $-1$? Explain.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**(a)** Let $\delta = \frac{\partial L}{\partial \hat y} = \hat y - y$. Then $\frac{\partial L}{\partial a_i} = \delta v_i + \lambda a_i$.
+$z_2$ feeds both averages (two paths, gradients add): $\frac{\partial L}{\partial z_2} = \delta\big(\frac{a_1}{2}+\frac{a_2}{2}\big)$; likewise $\frac{\partial L}{\partial z_1}=\delta\frac{a_1}{2}$, $\frac{\partial L}{\partial z_3}=\delta\frac{a_2}{2}$.
+$w_2$ is shared by all three outputs ($\partial z_1/\partial w_2 = x_2$, $\partial z_2/\partial w_2 = x_3$, $\partial z_3/\partial w_2 = x_4$), so
+$$\frac{\partial L}{\partial w_2} = \delta\Big(\frac{a_1}{2}x_2 + \frac{a_1+a_2}{2}x_3 + \frac{a_2}{2}x_4\Big) + \lambda w_2 .$$
+**(b)** $\delta = 2$, $\frac{\partial L}{\partial w_2} = 2\big(\tfrac12 + 0 + \tfrac12\big) + 0.5\cdot(-2) = 1 > 0$. GD moves against the gradient, so $w_2$ decreases: **toward $-3$**.
+The exam gives only the values the answer needs. The check picks $x_1 = x_5 = 3$, $w_1=w_3=1$, which make $\hat y = 3$, and compares with autograd through `F.conv1d`.
+<</SOLUTION>>
+""")
+
+code(r"""
+x = torch.tensor([[[3., 1., 0., 1., 3.]]], dtype=torch.float64)           # (N, C, L): x1..x5
+w = torch.tensor([[[1., -2., 1.]]], dtype=torch.float64, requires_grad=True)
+a = torch.tensor([1., 1.], dtype=torch.float64, requires_grad=True)
+y, lam = 1.0, 0.5
+z = F.conv1d(x, w)[0, 0]                                                 # (z1, z2, z3); conv1d is a cross-correlation, as in the exam
+v = F.avg_pool1d(z.view(1, 1, 3), kernel_size=2, stride=1)[0, 0]        # (v1, v2)
+y_hat = a @ v
+L = 0.5 * (y - y_hat) ** 2 + lam / 2 * (a.pow(2).sum() + w.pow(2).sum())
+L.backward()
+x1, x2, x3, x4, x5 = x.flatten().tolist(); a1, a2 = a.tolist(); w2 = w[0, 0, 1].item()
+#>> dL/dw2 from your formula in (a)
+delta = y_hat.item() - y
+dw2 = delta * (a1 / 2 * x2 + (a1 + a2) / 2 * x3 + a2 / 2 * x4) + lam * w2
+#<<
+print(f"y_hat = {y_hat.item():.1f}   dL/dw2: formula {dw2:.4f}, autograd {w.grad[0, 0, 1].item():.4f}  → move w2 toward {'-3' if dw2 > 0 else '-1'}")
+""")
+
+md(r"""
 ## 3. Pooling
 
 Pooling is the same patch extraction followed by a reduction instead of a dot product: unfold each channel separately, then take the max or the mean over the $K^2$ entries of each patch.
@@ -146,6 +187,29 @@ print("lecture example, 2x2 max pool stride 2:\n", pool2d(x_lec, 2).squeeze())
 
 md(r"""
 Max pooling routes the whole gradient to the arg-max of each window (the "max = router" pattern from Tutorial 1); average pooling spreads it as $1/K^2$. With overlapping windows ($K=3$, $S=2$) a pixel can win in two windows and receive two gradients; the check above covers that case.
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+True or false: a max-pooling layer with a $2\times2$ window and stride 2 contributes no learned parameters, but it does pass gradients backward during the backward pass.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**True.** It has nothing to learn (0 parameters), and its local gradient is 1 for the arg-max of each window and 0 elsewhere, so the upstream gradient is routed to the winners. Check on the lecture example: one 1 per window.
+<</SOLUTION>>
+""")
+
+code(r"""
+#>> count the parameters of nn.MaxPool2d(2, 2), then backprop the sum of its output on x_lec and print the input gradient
+pool = nn.MaxPool2d(2, 2)
+print("parameters:", sum(p.numel() for p in pool.parameters()))
+xg = x_lec.clone().requires_grad_()
+pool(xg).sum().backward()
+print("dL/dx (1 at each window's max):\n", xg.grad.squeeze())
+#<<
 """)
 
 md(r"""
@@ -241,6 +305,48 @@ for args in [(3, 10, 5, 1, True), (64, 64, 3, 1, False), (128, 128, 3, 32, False
     print(f"Conv2d(cin={args[0]}, cout={args[1]}, k={args[2]}, groups={args[3]}, bias={args[4]}): yours {conv_params(*args)}, torch {ref}")
 """)
 
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+A CNN classifies $64\times64\times3$ images. Layers, from input to output:
+- CONV1: 16 filters, kernel $3\times3$, stride 1, padding 1, with bias.
+- POOL1: max-pooling $2\times2$, stride 2, no padding.
+- CONV2: 32 filters, kernel $3\times3$, stride 1, padding 1, with bias.
+- POOL2: max-pooling $2\times2$, stride 2, no padding.
+- FC-10: fully connected, 10 outputs, on the flattened output of POOL2, with bias.
+
+Compute the **total number of learned parameters**. Show the computation for each layer separately, stating the number of filters, the depth of each feature map, and the bias.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+- CONV1: each filter is $3\times3\times3$ (input depth 3) $+1$ bias $=28$; $16\cdot 28 = 448$. Output $64\times64\times16$ (padding 1 keeps the size).
+- POOL1: 0. Output $32\times32\times16$.
+- CONV2: each filter is $3\times3\times16$ (depth 16) $+1 = 145$; $32\cdot145 = 4{,}640$. Output $32\times32\times32$.
+- POOL2: 0. Output $16\times16\times32 = 8{,}192$ values.
+- FC-10: $8192\cdot10+10 = 81{,}930$.
+
+**Total $= 448 + 4{,}640 + 81{,}930 = 87{,}018$**, 94% of it in the FC layer.
+<</SOLUTION>>
+""")
+
+code(r"""
+#>> per-layer parameter counts with conv_params (and the flattened size after POOL2 for the FC layer)
+p_conv1 = conv_params(3, 16, 3, bias=True)
+p_conv2 = conv_params(16, 32, 3, bias=True)
+p_fc = (16 * 16 * 32) * 10 + 10
+#<<
+net = nn.Sequential(nn.Conv2d(3, 16, 3, 1, 1), nn.MaxPool2d(2, 2), nn.Conv2d(16, 32, 3, 1, 1), nn.MaxPool2d(2, 2),
+                    nn.Flatten(), nn.Linear(16 * 16 * 32, 10))
+print("yours:", p_conv1, p_conv2, p_fc, "total", p_conv1 + p_conv2 + p_fc)
+print("torch:", [sum(p.numel() for p in m.parameters()) for m in net if any(True for _ in m.parameters())],
+      "total", sum(p.numel() for p in net.parameters()))
+h = torch.zeros(1, 3, 64, 64)
+for m in net:
+    h = m(h); print(f"  {type(m).__name__:10s} → {tuple(h.shape[1:])}")
+""")
+
 code(r"""
 def conv_only(m):   # parameters of the conv layers only (ignore BN)
     return sum(p.numel() for mod in m.modules() if isinstance(mod, nn.Conv2d) for p in mod.parameters())
@@ -262,6 +368,32 @@ md(r"""
 - ResNeXt-32x4d **doubles the inner width** (64 → 128 channels) at almost the same cost (70.1K): the 3×3 conv with 32 groups has $128\cdot 4 \cdot 9 = 4{,}608$ weights instead of $64\cdot 64\cdot 9 = 36{,}864$.
 
 ✏️ A depthwise conv is the extreme $G = C_{in} = C_{out}$. With `conv_params`, compare a 7×7 depthwise conv at 96 channels with a dense 3×3 conv at 96 channels.
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+A $1\times1$ convolution (kernel $=1\times1$) is widely used in deep architectures, e.g. in the Inception block and in ResNet's bottleneck block. Assume an input feature map of size $H\times W\times C_{in}$ and a $1\times1$ conv layer with $C_{out}$ filters (no bias).
+
+State the spatial size of the output and the number of learned parameters, and explain the main role of the $1\times1$ conv in the architecture: why is it used before an expensive $3\times3$ conv?
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+(There is no official solution for this question; this is ours.) Output $H\times W\times C_{out}$ (stride 1; a $1\times1$ kernel needs no padding). Parameters $C_{in}\cdot C_{out}$. It is the same linear map $\mathbb{R}^{C_{in}}\to\mathbb{R}^{C_{out}}$ applied at every pixel: it mixes channels and does not look at neighbours. Placed before a $3\times3$ conv it **reduces the channel count**, so the $3\times3$ conv, whose cost is $9\,C_{in}C_{out}HW$, runs on few channels. At the 256-channel interface of the bottleneck above: a $3\times3$ conv $256\to256$ has 589,824 weights, while $1\times1$ ($256\to64$) followed by $3\times3$ ($64\to64$) has 16,384 + 36,864 = 53,248, 11× fewer, and the extra ReLU after the $1\times1$ adds a nonlinearity.
+<</SOLUTION>>
+""")
+
+code(r"""
+H_, W_, C_in, C_out = 56, 56, 256, 64
+#>> parameter count of a 1x1 conv C_in → C_out without bias, and of 3x3 at 256 vs (1x1 256→64, then 3x3 64→64)
+p_1x1 = C_in * C_out
+p_direct, p_reduced = 9 * 256 * 256, 256 * 64 + 9 * 64 * 64
+#<<
+conv1x1 = nn.Conv2d(C_in, C_out, 1, bias=False)
+print("1x1 conv: yours", p_1x1, "| torch", conv1x1.weight.numel(), "| output shape", tuple(conv1x1(torch.zeros(1, C_in, H_, W_)).shape))
+print(f"3x3 at 256 ch: {p_direct:,}   1x1 reduce + 3x3 at 64 ch: {p_reduced:,}   ratio {p_direct / p_reduced:.1f}x")
 """)
 
 md(r"""

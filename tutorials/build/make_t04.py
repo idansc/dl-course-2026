@@ -145,6 +145,59 @@ md(r"""
 """)
 
 md(r"""
+**Past exam question (Moed B, 2026)**
+
+A single Transformer encoder block, INPUT → MHA → FFN:
+- INPUT: a sequence of length $T=20$ with embedding dimension $d_{\text{model}}=64$.
+- Multi-head self-attention with $h=4$ heads; assume $d_k = d_v = d_{\text{model}}/h$ in every head.
+- FFN: a linear layer to $d_{ff}=128$, then a linear layer back to 64.
+- Ignore LayerNorm and biases.
+
+Fill in the table (activation dimensions and number of learned parameters for INPUT $20\times64$ / 0, MHA, FFN). Show the MHA parameter computation explicitly.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+$d_k=d_v=64/4=16$. Per head $W_Q^i, W_K^i, W_V^i\in\mathbb{R}^{64\times16}$; over the 4 heads these stack into three $64\times64$ matrices, plus the output projection $W_O\in\mathbb{R}^{64\times64}$: MHA $=4\cdot64\cdot64 = \mathbf{16{,}384}$, output $20\times64$. The number of heads does not change the count. FFN $= 64\cdot128+128\cdot64 = \mathbf{16{,}384}$, output $20\times64$.
+<</SOLUTION>>
+""")
+
+code(r"""
+d_m, n_h, d_ff, T_q = 64, 4, 128, 20
+#>> MHA and FFN parameter counts by formula (no biases)
+p_mha = 3 * d_m * d_m + d_m * d_m
+p_ffn = d_m * d_ff + d_ff * d_m
+#<<
+mha_q = MHA(d_m, n_h, bias=False)
+ffn_q = nn.Sequential(nn.Linear(d_m, d_ff, bias=False), nn.ReLU(), nn.Linear(d_ff, d_m, bias=False))
+x_q = torch.randn(1, T_q, d_m)
+print(f"MHA: yours {p_mha}, module {sum(p.numel() for p in mha_q.parameters())}, output {tuple(mha_q(x_q).shape[1:])}")
+print(f"FFN: yours {p_ffn}, module {sum(p.numel() for p in ffn_q.parameters())}, output {tuple(ffn_q(mha_q(x_q)).shape[1:])}")
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+True or false: in a Transformer with self-attention layers, changing the input sequence length $T$ (keeping the same embedding dimension) does not change the number of learned parameters of the model.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**True.** $W_Q,W_K,W_V,W_O$ and the FFN act on each token's $d$-dimensional vector and are shared over positions; $T$ only sets the size of the activations and of the $T\times T$ attention matrix (the block above runs unchanged on $T=2000$). One caveat the exam does not raise: a **learned absolute position table** (GPT-2, the ViT in section 6) has $T_{\max}\cdot d$ parameters, so changing the maximum length changes that table. RoPE and sinusoidal positions have no parameters.
+<</SOLUTION>>
+""")
+
+code(r"""
+#>> run the same MHA + FFN on T = 20 and T = 2000; print the output shapes and the parameter count
+for T_len in [20, 2000]:
+    out_q = ffn_q(mha_q(torch.randn(1, T_len, d_m)))
+    print(f"T = {T_len:4d}: output {tuple(out_q.shape[1:])}, parameters {sum(p.numel() for p in [*mha_q.parameters(), *ffn_q.parameters()])}")
+#<<
+""")
+
+md(r"""
 ## 3. The modern block → a mini-GPT
 
 Three components, each checked on its own, then assembled.
@@ -493,6 +546,31 @@ md(r"""
 """)
 
 md(r"""
+**Past exam question (Moed C, 2026)**
+
+True or false: in standard self-attention, reordering the input tokens (the same permutation applied to the queries, keys and values) changes the output matrix only by the same permutation of its rows.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**True** (no mask, no positional encoding). For a permutation matrix $P$: $\mathrm{softmax}\big(PQK^\top P^\top/\sqrt{d_k}\big)PV = P\,\mathrm{softmax}\big(QK^\top/\sqrt{d_k}\big)P^\top P V = P\,\mathrm{Attn}(X)$, because a row-wise softmax commutes with permuting rows and columns, and $P^\top P=I$. Self-attention is permutation-**equivariant**, the first line of the check above; a causal mask or RoPE breaks it.
+<</SOLUTION>>
+""")
+
+code(r"""
+torch.manual_seed(0)
+Xp = torch.randn(1, 1, 6, 8, dtype=torch.float64)       # (B, heads, T, d)
+Wq, Wk, Wv = (torch.randn(8, 8, dtype=torch.float64) for _ in range(3))
+P = torch.randperm(6)
+#>> single-head self-attention of X and of X[P] with the attention() function above; compare Attn(X[P]) with Attn(X)[P]
+attn_of = lambda X: attention(X @ Wq, X @ Wk, X @ Wv)[0]
+err = (attn_of(Xp[:, :, P]) - attn_of(Xp)[:, :, P]).abs().max().item()
+#<<
+print("max |Attn(PX) − P·Attn(X)| =", err)
+""")
+
+md(r"""
 ## 6. ViT: patchify, then a Transformer encoder
 
 **Patchify.** An image `(B, C, H, W)` with patch size $p$ becomes `(B, N, C·p·p)` with $N = HW/p^2$, flattened in `(C, p, p)` order. A linear layer on these vectors **is** a convolution with `kernel_size = stride = p`, which is how ViT code implements it. That is the check.
@@ -587,6 +665,50 @@ plt.show()
 
 md(r"""
 Each position embedding is most similar to itself and to its spatial neighbours: the corner patches match their own row and column edge, the centre patch a blob around the centre. Nothing told the model the patches lie on a 2D grid (positions are just indices 0–63); it learned the 2D layout from 10k images in 8 epochs. Test accuracy is ≈ 55% on 2k images, far below a CNN on the same data: the lecture's point that ViTs lack the locality prior and must learn it from data.
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+In a Vision Transformer (ViT) the image is split into fixed-size patches (e.g. $16\times16$); each patch is flattened into a vector and used as a token, and a learned positional embedding is added to every token.
+
+Explain why ViT needs positional embeddings while a standard CNN does not. Refer explicitly to the nature of the self-attention operation and to the convolution operation along the spatial dimensions.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+Self-attention treats its input as a **set**: it is permutation-equivariant (previous section), and with [CLS] or mean pooling the prediction is permutation-invariant. Without position embeddings, shuffling the patches gives exactly the same output, so the model cannot tell where a patch was, nor which patches are neighbours. The embeddings attach each token's location to its content. A convolution is defined on the 2-D grid: each output combines a fixed $K\times K$ neighbourhood, and the weight of each neighbour is tied to its relative offset, so the spatial layout (locality and relative position) is built into the operation, and stacked layers plus pooling turn it into global position. Check below: with its position embeddings removed, our trained TinyViT gives identical logits (up to float32 round-off) for an image and its patch-shuffled version; with them, the logits change by up to ~3. Accuracy on shuffled images, however, stays at ≈ 0.50: after 8 epochs on 10k images this small ViT classifies mostly from the bag of patch contents and has learned little use of their layout, the same missing locality prior as above.
+<</SOLUTION>>
+""")
+
+code(r"""
+@torch.no_grad()
+def vit_logits(model, img, perm=None, use_pos=True):
+    x = model.embed(patchify(img, model.p))
+    if perm is not None:
+        x = x[:, perm]                                  # shuffle the patches
+    x = torch.cat([model.cls.expand(len(x), -1, -1), x], dim=1)
+    if use_pos:
+        x = x + model.pos
+    for blk in model.blocks:
+        x, _ = blk(x, rope=None, causal=False)
+    return model.head(model.norm(x[:, 0]))
+
+vit.eval()
+imgs, labels = next(iter(test_loader))
+imgs = imgs.to(device)
+perm = torch.randperm(64, generator=torch.Generator().manual_seed(0)).to(device)
+#>> max |logits(shuffled) − logits(original)| without and with the position embeddings, and the accuracy on shuffled images
+diff_nopos = (vit_logits(vit, imgs, perm, use_pos=False) - vit_logits(vit, imgs, use_pos=False)).abs().max().item()
+diff_pos = (vit_logits(vit, imgs, perm) - vit_logits(vit, imgs)).abs().max().item()
+acc_orig = (vit_logits(vit, imgs).argmax(-1).cpu() == labels).float().mean().item()
+acc_shuf = (vit_logits(vit, imgs, perm).argmax(-1).cpu() == labels).float().mean().item()
+#<<
+vit.train()
+print(f"no position embeddings: max |Δ logits| after shuffling = {diff_nopos:.1e}")
+print(f"with position embeddings: max |Δ logits| after shuffling = {diff_pos:.2f}")
+print(f"accuracy on {len(labels)} test images: original {acc_orig:.3f}, patch-shuffled {acc_shuf:.3f}")
 """)
 
 md(r"""

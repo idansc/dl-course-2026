@@ -269,6 +269,61 @@ print("h_T     max diff:", (hT - hT_ref[0]).abs().max().item(), "  c_T max diff:
 """)
 
 md(r"""
+**Past exam question (Moed B, 2026)**
+
+Network: INPUT → LSTM-20 → FC-10.
+- INPUT: sequence length 15, feature dimension 12, i.e. input $15\times12$ with $x_t\in\mathbb{R}^{12}$.
+- LSTM-20: 20 hidden units; assume the LSTM cell has 4 gates.
+- FC-10: 10 output units, applied to the last hidden state.
+- No bias anywhere.
+
+Fill in the table (activation dimensions and number of learned parameters for INPUT $15\times12$ / 0, LSTM-20, FC-10). Show the LSTM parameter computation explicitly.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+Each of the 4 gates has $W\in\mathbb{R}^{20\times12}$ for the input and $U\in\mathbb{R}^{20\times20}$ for the previous hidden state: LSTM $= 4(12\cdot20 + 20\cdot20) = 4\cdot640 = \mathbf{2{,}560}$; output $15\times20$ (all steps) or $20$ (last state). FC-10: $20\cdot10 = \mathbf{200}$; output $10$. The sequence length does not enter the parameter count: the weights are shared over time.
+<</SOLUTION>>
+""")
+
+code(r"""
+#>> LSTM and FC parameter counts by formula (no bias)
+p_lstm = 4 * (12 * 20 + 20 * 20)
+p_fc = 20 * 10
+#<<
+lstm_q, fc_q = nn.LSTM(12, 20, bias=False, batch_first=True), nn.Linear(20, 10, bias=False)
+out_q, (h_q, _) = lstm_q(torch.zeros(1, 15, 12))
+print(f"LSTM-20: yours {p_lstm}, torch {sum(p.numel() for p in lstm_q.parameters())}, outputs {tuple(out_q.shape[1:])} / last state {tuple(h_q.shape[2:])}")
+print(f"FC-10  : yours {p_fc}, torch {sum(p.numel() for p in fc_q.parameters())}, output {tuple(fc_q(h_q[0]).shape[1:])}")
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026)**
+
+An LSTM layer with $d_h = 64$ hidden units runs on an input sequence with $x_t\in\mathbb{R}^{32}$. Every gate has a bias. **How many learned parameters does the layer have?** Show the computation and explain the contribution of each gate.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+Four gates (input $i$, forget $f$, output $o$, candidate $g$), each $\sigma\text{ or }\tanh(Wx_t + Uh_{t-1} + b)$ with $W\in\mathbb{R}^{64\times32}$ (2,048), $U\in\mathbb{R}^{64\times64}$ (4,096), $b\in\mathbb{R}^{64}$ (64): 6,208 per gate, $4\cdot 64\cdot(32+64+1) = \mathbf{24{,}832}$.
+`nn.LSTM` reports **25,088**: PyTorch (like cuDNN) keeps two bias vectors per gate, $b_{ih}$ and $b_{hh}$, i.e. $4\cdot64 = 256$ extra parameters that are redundant (only their sum matters). Both numbers are right under their convention; the exam's (one bias per gate) is 24,832.
+<</SOLUTION>>
+""")
+
+code(r"""
+d_x, d_h = 32, 64
+#>> parameter count with one bias vector per gate
+p_lstm = 4 * d_h * (d_x + d_h + 1)
+#<<
+lstm_q = nn.LSTM(d_x, d_h)
+print("yours (one bias per gate):", p_lstm)
+print("nn.LSTM:", {n: tuple(p.shape) for n, p in lstm_q.named_parameters()}, "total", sum(p.numel() for p in lstm_q.parameters()))
+print("nn.LSTM without the redundant b_hh:", sum(p.numel() for n, p in lstm_q.named_parameters() if n != "bias_hh_l0"))
+""")
+
+md(r"""
 ### A character-level language model
 
 Same math, but for speed we train with `nn.LSTM` (fused kernels) now that we know what it computes. 65 distinct characters; a uniform guess costs $\ln 65 = 4.17$ nats per character. Teacher forcing: random windows of 100 characters, the target is the window shifted by one. Gradient clipping at norm 1 guards against the exploding case from the recap.
@@ -618,6 +673,52 @@ These are untrained profiles; training moves the gates. They still decide whethe
 The practical rules that follow: initialize the LSTM forget bias to 1 (some libraries do it for you; PyTorch does not); clip gradients for the exploding case; and if a task needs dependencies hundreds of steps long, use a gated or state-space recurrence (or attention), not a vanilla RNN.
 
 ✏️ Scale the vanilla RNN's `weight_hh` by 3 (`rnn.weight_hh.data *= 3`) and re-run. Does the gradient still vanish? What does `tanh` saturation do to the Jacobian $\mathrm{diag}(1-h^2)W_{hh}$?
+""")
+
+md(r"""
+**Past exam question (Moed C, 2026), backpropagation through time**
+
+A vanilla RNN with a scalar hidden state runs on an input sequence of length 3. Figure, in words: a chain $h_0=0 \to h_1 \to h_2 \to h_3$ with weight $w_h$ on every recurrent edge; input $x_t$ enters $h_t$ with weight $w_x$; the output $\hat y$ is computed from $h_3$ with weight $v$. For $t\in\{1,2,3\}$:
+$$z_t = w_xx_t + w_hh_{t-1},\qquad h_t=\tanh(z_t),\qquad h_0=0,\qquad \hat y = v\,h_3,\qquad \tanh'(z) = 1-\tanh^2(z),$$
+$$L = \tfrac12(y-\hat y)^2 + \tfrac{\lambda}{2}\big(w_x^2+w_h^2+v^2\big),\qquad \lambda>0.$$
+The weights $w_x, w_h, v$ are shared across time steps.
+
+**(a)** Give algebraic expressions for $\frac{\partial L}{\partial \hat y}$, $\frac{\partial L}{\partial v}$, $\frac{\partial L}{\partial h_3}$, $\frac{\partial L}{\partial h_2}$, and $\frac{\partial L}{\partial w_h}$ (sum the contributions of every step in which $w_h$ appears).
+
+**(b)** The same architecture is extended to a long sequence of $T\gg3$ steps, $\hat y = v\,h_T$. In BPTT, $\partial L/\partial w_h$ contains the product $\prod_{t=k+1}^{T}(1-h_t^2)\,w_h$ on the way from $h_T$ back to $h_k$ ($k\ll T$). Under which conditions on $w_h$ and on the hidden states $\{h_t\}$ does this product decay exponentially with the sequence length (vanishing gradient)? What does this mean in practice for training the RNN on long sequences? Propose **one architectural change** that reduces the problem and explain briefly how it works.
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+**(a)** $\frac{\partial L}{\partial\hat y} = \hat y - y$, $\;\frac{\partial L}{\partial v} = (\hat y-y)h_3 + \lambda v$, $\;\frac{\partial L}{\partial h_3} = (\hat y-y)v$, $\;\frac{\partial L}{\partial h_2} = (\hat y-y)\,v\,(1-h_3^2)\,w_h$.
+With $\delta_t = \partial L/\partial z_t$: $\delta_3 = (\hat y-y)v(1-h_3^2)$, $\delta_2 = \delta_3 w_h(1-h_2^2)$, $\delta_1 = \delta_2 w_h (1-h_1^2)$, and since $\partial z_t/\partial w_h = h_{t-1}$,
+$$\frac{\partial L}{\partial w_h} = \delta_3h_2 + \delta_2h_1 + \delta_1h_0 + \lambda w_h = \delta_3h_2+\delta_2h_1+\lambda w_h\quad(h_0=0).$$
+**(b)** $0 < 1-h_t^2\le1$, so the product decays exponentially when $|w_h|(1-h_t^2) < 1$ for most steps: always if $|w_h|<1$, and also for larger $|w_h|$ when the states saturate ($|h_t|\to1$, so $1-h_t^2\to0$). In practice the gradient from the loss at step $T$ does not reach early steps, so the RNN cannot learn long-range dependencies (section 5 measured ~$10^{-3}$ after 10 steps for a vanilla RNN). Fix: an **LSTM/GRU**. The cell state is updated additively, $c_t = f_t\odot c_{t-1} + i_t\odot g_t$, so $\partial c_t/\partial c_{t-1} = f_t$, with no $w_h$ and no $\tanh'$; with the forget gate near 1 the gradient survives hundreds of steps (forget-bias curves above).
+<</SOLUTION>>
+""")
+
+code(r"""
+torch.manual_seed(1)
+xs_q = torch.randn(3, dtype=torch.float64)
+w_x, w_h, v_q = (torch.randn((), dtype=torch.float64, requires_grad=True) for _ in range(3))
+y_q, lam = 0.7, 0.1
+hs = [torch.zeros((), dtype=torch.float64)]
+for t in range(3):
+    hs.append(torch.tanh(w_x * xs_q[t] + w_h * hs[-1]))
+y_hat = v_q * hs[3]
+L = 0.5 * (y_q - y_hat) ** 2 + lam / 2 * (w_x ** 2 + w_h ** 2 + v_q ** 2)
+L.backward()
+h0, h1, h2, h3 = (h.item() for h in hs); wh, v_ = w_h.item(), v_q.item(); r = y_hat.item() - y_q
+#>> dL/dv and dL/dw_h from your formulas in (a)
+dv = r * h3 + lam * v_
+d3 = r * v_ * (1 - h3 ** 2)
+d2 = d3 * wh * (1 - h2 ** 2)
+d1 = d2 * wh * (1 - h1 ** 2)
+dwh = d3 * h2 + d2 * h1 + d1 * h0 + lam * wh
+#<<
+print(f"dL/dv  : formula {dv:.10f}   autograd {v_q.grad.item():.10f}")
+print(f"dL/dw_h: formula {dwh:.10f}   autograd {w_h.grad.item():.10f}")
 """)
 
 # ---------------------------------------------------------------- GRU
