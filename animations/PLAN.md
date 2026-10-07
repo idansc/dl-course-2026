@@ -39,6 +39,9 @@ built step by step, a bottom caption naming the current step, real numbers where
 | 4 | TransformerBlock | residual stream: attention mixes across tokens, MLP acts per token | p7 84–92 |
 | 4 | RoPERotation | queries/keys rotated by position; the score depends only on the offset | L8b |
 | 4 | ViTPatches | image → 16×16 patches → tokens + positions → Transformer | p8 61 |
+| 4 | SinusoidalClock | sinusoidal PE as 8 clock hands at θ_j = 10000^(−2j/d); d×T heatmap fills in; a shift k turns every hand by kθ_j (PE(m+k) = R_k PE(m)); PE·PE banded, constant along diagonals (`w04_positions.py`) | p7 71–77 |
+| 4 | WherePositionEnters | the q·k pipeline and where position enters: (a) x+p before W_Q/W_K, (b) bias b(i−j) (T5/ALiBi), (c) rotary, (d) NoPE (mask only); then ALiBi on 4 heads, slopes 1/2…1/128 (`w04_positions.py`) | p7 71–77, L8b |
+| 4 | LengthExtrapolation | RoPE past the training length (d=128, L=4096 → 16384): slow pairs never finish a turn, so angles past L are unseen; position interpolation squeezes them back; wavelengths for PI / NTK base 40,890 / YaRN (`w04_positions.py`) | L8b |
 | 5 | Roofline | arithmetic intensity: prefill is compute-bound, decoding is memory-bound | L11b |
 | 5 | MemoryBudget | params, grads, Adam states, activations, KV cache as stacked bars while the model grows | new |
 | 5 | Quantization | float weights snap to an int8 grid; error vs bits | L11b |

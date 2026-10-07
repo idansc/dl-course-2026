@@ -13,15 +13,16 @@ md(rf"""
 [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/idansc/dl-course-2026/blob/main/tutorials/{STEM}.ipynb)
 · [Recap slides (PDF)](https://github.com/idansc/dl-course-2026/blob/main/tutorials/recap/{STEM}_recap.pdf)
 
-Plan for today (≈ 70 min):
+Plan for today (≈ 85 min):
 1. Lecture recap: attention as gating, scaled dot-product, multi-head, the block, the 2026 block, ViT (10 min)
 2. Scaled dot-product attention, causal mask, multi-head attention (10 min)
 3. The modern block: RMSNorm, SwiGLU, RoPE → a char-level mini-GPT on Tiny Shakespeare (15 min)
 4. Grouped-query attention and a top-k mixture-of-experts FFN (10 min)
 5. Symmetry: attention is permutation-equivariant; positional encoding breaks it (5 min)
-6. Patchify + a tiny ViT on CIFAR-10 (10 min)
-7. Inside the trained mini-GPT: logit lens and attention sinks (10 min)
-8. If time: train the MoE mini-GPT with and without the balancing loss
+6. Where does position enter? Absolute, relative, rotary, none: five schemes trained side by side, RoPE in depth, context extension (15 min)
+7. Patchify + a tiny ViT on CIFAR-10 (10 min)
+8. Inside the trained mini-GPT: logit lens and attention sinks (10 min)
+9. If time: train the MoE mini-GPT with and without the balancing loss
 
 Runs on CPU (Colab or laptop, ≈ 10 min end to end). Cells marked ✏️ are for you to try.
 <<STUDENT>>
@@ -185,7 +186,7 @@ True or false: in a Transformer with self-attention layers, changing the input s
 ✏️ Your answer:
 <</STUDENT>>
 <<SOLUTION>>
-**True.** $W_Q,W_K,W_V,W_O$ and the FFN act on each token's $d$-dimensional vector and are shared over positions; $T$ only sets the size of the activations and of the $T\times T$ attention matrix (the block above runs unchanged on $T=2000$). One caveat the exam does not raise: a **learned absolute position table** (GPT-2, the ViT in section 6) has $T_{\max}\cdot d$ parameters, so changing the maximum length changes that table. RoPE and sinusoidal positions have no parameters.
+**True.** $W_Q,W_K,W_V,W_O$ and the FFN act on each token's $d$-dimensional vector and are shared over positions; $T$ only sets the size of the activations and of the $T\times T$ attention matrix (the block above runs unchanged on $T=2000$). One caveat the exam does not raise: a **learned absolute position table** (GPT-2, the ViT in section 7; section 6 compares it with the alternatives) has $T_{\max}\cdot d$ parameters, so changing the maximum length changes that table. RoPE and sinusoidal positions have no parameters.
 <</SOLUTION>>
 """)
 
@@ -269,7 +270,7 @@ print("max |mine − complex form| =", (apply_rope(q1[None], cos, sin, torch.ten
 
 md(r"""
 **The block.** Pre-norm, RMSNorm, RoPE inside attention, SwiGLU. Flags `causal` and `rope` let us switch both off in section 5.
-For training we call `F.scaled_dot_product_attention` (fused, faster); `return_attn=True` routes through our `attention` so we can look at the weights in section 7.
+For training we call `F.scaled_dot_product_attention` (fused, faster); `return_attn=True` routes through our `attention` so we can look at the weights in section 8.
 """)
 
 code(r"""
@@ -542,7 +543,7 @@ md(r"""
 - **RoPE:** the error is ~0.07 on outputs of size ~0.8. Same tokens, different positions → different output.
 - **Causal mask:** the error is ~1, larger still: after permuting, token $i$ sees a different prefix.
 
-✏️ The trained mini-GPT has a causal mask *and* RoPE. Which of the two would already be enough for it to know word order? (Hint: run the third line above on a causal model without RoPE: "NoPE" decoders do learn order from the mask alone.)
+✏️ The trained mini-GPT has a causal mask *and* RoPE. Which of the two would already be enough for it to know word order? (Hint: run the third line above on a causal model without RoPE: "NoPE" decoders do learn order from the mask alone; section 6 trains one.)
 """)
 
 md(r"""
@@ -571,7 +572,432 @@ print("max |Attn(PX) − P·Attn(X)| =", err)
 """)
 
 md(r"""
-## 6. ViT: patchify, then a Transformer encoder
+## 6. Where does position enter? Absolute, relative, rotary, none
+
+Self-attention sees a set (section 5). A positional scheme injects the index at one of three places: the input $x_m$, the attention logit $E_{mn}$, or the vectors $q_m, k_n$. Notation: query position $m$, key position $n \le m$, offset $r = m-n$, model width $d$, head size $d_h$, $H$ heads.
+
+**(a) Absolute, added to the input:** $x_m \leftarrow x_m + p_m$.
+- *Learned table* $P\in\mathbb{R}^{T_{\max}\times d}$: GPT-2, BERT ([1810.04805](https://arxiv.org/abs/1810.04805)), ViT ([2010.11929](https://arxiv.org/abs/2010.11929)). $T_{\max}\cdot d$ parameters; there is no row for $m\ge T_{\max}$.
+- *Sinusoidal* (Vaswani et al. 2017, [1706.03762](https://arxiv.org/abs/1706.03762)): $p_{m,2j}=\sin(m\,\omega_j)$, $p_{m,2j+1}=\cos(m\,\omega_j)$, $\omega_j=10000^{-2j/d}$. Per pair,
+$\begin{pmatrix}\sin (m+k)\omega\\ \cos (m+k)\omega\end{pmatrix}=\begin{pmatrix}\cos k\omega & \sin k\omega\\ -\sin k\omega & \cos k\omega\end{pmatrix}\begin{pmatrix}\sin m\omega\\ \cos m\omega\end{pmatrix}$,
+so $p_{m+k}=R_k\,p_m$ with $R_k$ block-diagonal, orthogonal and independent of $m$: an offset is a fixed linear map. The model can use it only through $W_Q, W_K$, and mixed with content: $\langle W_Q(x_m+p_m), W_K(x_n+p_n)\rangle$ has content–content, content–position and position–position terms.
+
+**(b) Relative, a bias on the logits:** $E_{mn}=q_m^\top k_n/\sqrt{d_h}+b_h(m-n)$.
+- Shaw et al. 2018 ([1803.02155](https://arxiv.org/abs/1803.02155)): learned vectors for the clipped offset $\mathrm{clip}(m-n,\pm K)$, added to the keys (and values).
+- T5 (Raffel et al. 2020, [1910.10683](https://arxiv.org/abs/1910.10683)): one learned scalar per head per offset bucket, shared over layers; 32 buckets, exact for small offsets, log-spaced up to 128, one bucket for everything beyond.
+- ALiBi (Press et al. 2022, [2108.12409](https://arxiv.org/abs/2108.12409)): no parameters, $b_h(m-n) = -s_h\,|m-n|$ with geometric slopes $s_h = 2^{-8h/H}$, $h=1,\dots,H$ ($\tfrac12,\tfrac14,\dots,\tfrac1{256}$ for $H=8$). Each head is a recency prior with its own scale $\approx 1/s_h$ tokens. Defined for every offset, so it runs at any length.
+
+**(c) Rotary, on $q$ and $k$** (RoFormer, Su et al. 2021, [2104.09864](https://arxiv.org/abs/2104.09864)): $q_m\leftarrow R_m q_m$, $k_n\leftarrow R_n k_n$ (section 3). The logit depends on content and on $m-n$ only; no additive term, no parameters. Llama 2/3, Qwen 2/3, Mistral, Gemma, DeepSeek-V3 (on a separate 64-dim slice of each head, the "decoupled RoPE" of MLA). Llama 4 interleaves RoPE layers with NoPE layers.
+
+**(d) None (NoPE).** In a causal decoder token $m$ attends over exactly $m+1$ tokens, so position leaks through the mask: e.g. a head with uniform weights outputs a mean of $m+1$ vectors, whose norm shrinks with $m$. Haviv et al. 2022 ([2203.16634](https://arxiv.org/abs/2203.16634)): NoPE LMs come close to the perplexity of LMs with positions. Kazemnejad et al. 2023 ([2305.19466](https://arxiv.org/abs/2305.19466)): on small synthetic tasks NoPE length-generalizes better than absolute, T5 bias, ALiBi and RoPE. Encoders (no mask) cannot use NoPE: they are permutation-equivariant.
+
+**(e) Extending RoPE past the training length.** Pair $j$ rotates with frequency $\theta_j=b^{-2j/d_h}$, wavelength $\lambda_j=2\pi/\theta_j$. Pairs with $\lambda_j<T_{\text{train}}$ complete full turns in training and see every angle. Pairs with $\lambda_j>T_{\text{train}}$ only ever see angles in $[0, T_{\text{train}}\theta_j)$; at a longer offset they produce angles never seen in training. Fixes, all without new parameters, with $s = T/T_{\text{train}}$:
+- *Position interpolation* (PI, Chen et al. 2023, [2306.15595](https://arxiv.org/abs/2306.15595)): $m \to m/s$. Every angle is back in the trained range, but neighbouring tokens are now $\theta_j/s$ apart, in the high-frequency pairs too. Used with a short fine-tune (1000 steps in the paper).
+- *NTK-aware* scaling (bloc97, 2023): $b \to b\, s^{d_h/(d_h-2)}$. The highest frequency $\theta_0=1$ is unchanged, the lowest is divided by exactly $s$, geometric in between.
+- *YaRN* (Peng et al. 2023, [2309.00071](https://arxiv.org/abs/2309.00071)), "NTK-by-parts": $\theta_j$ unchanged for $\lambda_j \ll T_{\text{train}}$, $\theta_j/s$ (PI) for $\lambda_j > T_{\text{train}}$, a linear ramp in between; plus a logit temperature $\sqrt{1/t}=0.1\ln s+1$. Used for the long-context versions of Qwen 2.5 and DeepSeek-V3; Llama 3.1's released code uses the same piecewise rule.
+- Raise the base at training time: Llama 3 uses $b=500{,}000$; "ABF" (Xiong et al. 2023, [2309.16039](https://arxiv.org/abs/2309.16039)) raises it before long-context fine-tuning. Fewer pairs then complete a turn within the context.
+
+**(f) Multimodal.** Images: 2D RoPE (Heo et al. 2024, [2403.13298](https://arxiv.org/abs/2403.13298)) rotates half of the pairs by the row index and half by the column index, so the logit depends on $(\Delta y, \Delta x)$. Qwen2-VL's M-RoPE ([2409.12191](https://arxiv.org/abs/2409.12191)) splits the pairs into three sections driven by (time, height, width) indices; a text token gets the same index in all three, which reduces to 1D RoPE. A learned table (the ViT in section 7) must be resampled (bicubic, as in ViT/DeiT fine-tuning at higher resolution) to change the number of patches.
+
+In this section: implement the sinusoidal table and ALiBi, derive RoPE's relative property and look at what each rotary pair can encode, train the five schemes (none, learned, sinusoidal, ALiBi, RoPE) on the same task and test them at 2–8× the training length, then extend RoPE with PI, NTK-aware and by-parts scaling.
+""")
+
+md(r"""
+**Sinusoidal table.** Even columns $\sin(m\omega_j)$, odd columns $\cos(m\omega_j)$. Check: the identity $p_{m+k} = R_k\,p_m$ for every $m$, with one matrix $R_k$ per offset.
+""")
+
+code(r"""
+def sinusoidal_table(T, d, base=10000.0):
+    m = torch.arange(T, dtype=torch.float64)[:, None]                    # (T, 1)
+    omega = base ** (-torch.arange(0, d, 2, dtype=torch.float64) / d)   # (d/2,)
+    pe = torch.zeros(T, d, dtype=torch.float64)
+    #>> even columns sin(m ω_j), odd columns cos(m ω_j)
+    pe[:, 0::2] = torch.sin(m * omega)
+    pe[:, 1::2] = torch.cos(m * omega)
+    #<<
+    return pe
+""")
+
+code(r"""
+pe = sinusoidal_table(512, 64)
+print("spot check |PE[37, 10] − sin(37 / 10000^(10/64))| =", abs(pe[37, 10].item() - math.sin(37 / 10000 ** (10 / 64))))
+omega = 10000.0 ** (-torch.arange(0, 64, 2, dtype=torch.float64) / 64)
+
+def R_offset(k):   # block-diagonal: maps (sin mω_j, cos mω_j) to (sin (m+k)ω_j, cos (m+k)ω_j) for every j
+    Rk = torch.zeros(64, 64, dtype=torch.float64)
+    c, s = torch.cos(k * omega), torch.sin(k * omega)
+    Rk[0::2, 0::2], Rk[0::2, 1::2] = torch.diag(c), torch.diag(s)
+    Rk[1::2, 0::2], Rk[1::2, 1::2] = torch.diag(-s), torch.diag(c)
+    return Rk
+
+for k in (1, 7, 100):
+    print(f"k = {k:3d}: max over m < 400 of |PE(m+k) − R_k PE(m)| = {(pe[k:k + 400] - pe[:400] @ R_offset(k).T).abs().max().item():.1e}")
+""")
+
+md(r"""
+**ALiBi.** A bias tensor `(H, T, T)` with entry $-s_h|m-n|$, added to the logits before the causal mask and the softmax. Check against a loop, and against the form in the ALiBi reference code, which adds $s_h\cdot n$ (key index only): for $n\le m$, $s_h n = -s_h(m-n) + s_h m$, a per-row constant, and softmax is invariant to adding a constant to a row.
+""")
+
+code(r"""
+def alibi_slopes(H):
+    return 2.0 ** (-8.0 * torch.arange(1, H + 1, dtype=torch.float64) / H)   # (H,): 2^(-8/H), 2^(-16/H), ..., 2^(-8)
+
+def alibi_bias(T, H):
+    # (H, T, T) additive logit bias, entry [h, m, n] = −s_h |m − n|; the causal mask is applied separately
+    #>> |m − n| as a (T, T) matrix, times −s_h per head
+    dist = (torch.arange(T)[:, None] - torch.arange(T)[None, :]).abs()
+    return -alibi_slopes(H)[:, None, None] * dist
+    #<<
+""")
+
+code(r"""
+H, T = 8, 12
+print("slopes (H = 8):", [f"1/{round(1 / s)}" for s in alibi_slopes(H).tolist()])
+ref = torch.tensor([[[-(2.0 ** (-8 * (h + 1) / H)) * abs(m - n) for n in range(T)] for m in range(T)] for h in range(H)], dtype=torch.float64)
+print("max |mine − loop| =", (alibi_bias(T, H) - ref).abs().max().item())
+scores = torch.randn(H, T, T, dtype=torch.float64)
+key_only = alibi_slopes(H)[:, None, None] * torch.arange(T, dtype=torch.float64)    # s_h · n, the reference-code form
+probs = lambda b: (scores + b).masked_fill(~causal_mask(T), float("-inf")).softmax(-1)
+print("softmax with −s|m−n| vs with s·n: max diff =", (probs(alibi_bias(T, H)) - probs(key_only)).abs().max().item())
+""")
+
+md(r"""
+**RoPE in complex form.** Write pair $j$ of a vector as one complex number, $z_j = x_{2j} + i\,x_{2j+1}$. Rotating the pair by $m\theta_j$ is multiplying by $e^{im\theta_j}$, and for two real vectors $\langle a,b\rangle = \mathrm{Re}\sum_j a_j\bar b_j$. Hence
+$$\langle R_m q,\, R_n k\rangle = \mathrm{Re}\sum_{j=0}^{d_h/2-1} q_j e^{im\theta_j}\,\overline{k_j e^{in\theta_j}} = \mathrm{Re}\sum_j q_j\bar k_j\, e^{i(m-n)\theta_j} = \sum_j |q_j|\,|k_j|\cos\!\big((m-n)\theta_j + \phi_j\big),\qquad \phi_j=\arg q_j-\arg k_j .$$
+- The logit depends on the positions only through $r = m-n$. Content sets the amplitude $|q_j||k_j|$ and the phase $\phi_j$ of each term.
+- As a function of the offset, the logit is a **trigonometric polynomial with fixed frequencies** $\theta_0 > \theta_1 > \dots$: each query–key pair picks amplitudes and phases for $d_h/2$ given sinusoids of $r$. Pair 0 ($\theta_0 = 1$, wavelength $2\pi \approx 6.3$ tokens) separates offsets 1, 2, 3: local position. The last pairs turn by a small angle over the whole context: they hardly depend on $r$ and act as a content channel with a slow trend (Barbero et al. 2024, [2410.06205](https://arxiv.org/abs/2410.06205), find that Gemma uses its lowest frequencies this way).
+- **Long-range decay** (RoFormer §3.4.3). With $h_j = q_j\bar k_j$ and $S_j = \sum_{l<j} e^{ir\theta_l}$, Abel summation gives $\big|\sum_j h_j e^{ir\theta_j}\big| \le \max_j|h_{j+1}-h_j| \sum_{j=1}^{d_h/2}|S_j|$. The factor $\frac{2}{d_h}\sum_j |S_j|$ decreases (with oscillations) as $r$ grows: the attainable logit for distant tokens is smaller.
+
+Check: the complex formula against `apply_rope` from section 3, at pairs $(m,n)$ with the same and with different offsets, up to $m = 4000$.
+""")
+
+code(r"""
+torch.manual_seed(0)
+hd = 16
+cos_c, sin_c = rope_cache(4096, hd)
+theta16 = 10000.0 ** (-torch.arange(0, hd, 2, dtype=torch.float64) / hd)
+qv, kv = torch.randn(hd, dtype=torch.float64), torch.randn(hd, dtype=torch.float64)
+zq, zk = torch.view_as_complex(qv.view(-1, 2)), torch.view_as_complex(kv.view(-1, 2))   # d_h/2 complex numbers each
+
+def score_rotated(m, n):   # <R_m q, R_n k> with section 3's apply_rope
+    return (apply_rope(qv[None], cos_c, sin_c, torch.tensor([m])) @ apply_rope(kv[None], cos_c, sin_c, torch.tensor([n])).T).item()
+
+def score_complex(r):      # Re Σ_j q_j conj(k_j) e^{i r θ_j}
+    return (zq * zk.conj() * torch.exp(1j * r * theta16)).real.sum().item()
+
+for m, n in [(5, 2), (300, 297), (4000, 3997), (10, 900), (1000, 10)]:
+    print(f"(m, n) = ({m:4d}, {n:4d}), r = {m - n:5d}: rotated {score_rotated(m, n):+.6f}  complex {score_complex(m - n):+.6f}  |diff| {abs(score_rotated(m, n) - score_complex(m - n)):.1e}")
+""")
+
+md(r"""
+**What each pair can encode.** Left: $\cos(r\theta_j)$ for the 8 pairs of our head ($d_h = 16$, $b=10^4$) over offsets $0$–$255$; the model below is trained on 64 tokens (dashed line). Middle: wavelength per pair for our head and for a Llama-size head ($d_h=128$) with $b = 10^4$ (Llama 2) and $b = 5\cdot10^5$ (Llama 3); horizontal lines at the training lengths 64 (ours) and 8192 (Llama 3 pretraining). Right: the RoFormer decay factor $\frac{2}{d_h}\sum_j|S_j|$ for $d_h = 128$.
+""")
+
+code(r"""
+r = torch.arange(256, dtype=torch.float64)
+fig, axes = plt.subplots(1, 3, figsize=(15, 3.8))
+im = axes[0].imshow(torch.cos(torch.outer(theta16, r)), aspect="auto", cmap="RdBu_r", vmin=-1, vmax=1, interpolation="nearest")
+axes[0].axvline(64, c="k", ls="--", lw=1)
+axes[0].set_yticks(range(8), [f"j={j}, λ={2 * math.pi / t:.0f}" for j, t in enumerate(theta16.tolist())])
+axes[0].set(title="cos(r θ_j), d_h = 16, b = 1e4", xlabel="offset r (tokens)")
+fig.colorbar(im, ax=axes[0], shrink=0.8)
+
+for hd_, b, lab in [(16, 1e4, "d_h=16, b=1e4 (ours)"), (128, 1e4, "d_h=128, b=1e4"), (128, 5e5, "d_h=128, b=5e5")]:
+    th = b ** (-torch.arange(0, hd_, 2, dtype=torch.float64) / hd_)
+    axes[1].semilogy(torch.arange(hd_ // 2) / (hd_ // 2), 2 * math.pi / th, marker="o" if hd_ == 16 else None, ms=4, label=lab)
+for T_tr, lab in [(64, "T_train = 64"), (8192, "T_train = 8192")]:
+    axes[1].axhline(T_tr, c="gray", ls="--", lw=1); axes[1].text(0.02, T_tr * 1.3, lab, fontsize=8)
+axes[1].set(title="wavelength 2π/θ_j", xlabel="pair index j / (d_h/2)", ylabel="tokens"); axes[1].legend(fontsize=8)
+
+rr = torch.logspace(0, 5, 600, dtype=torch.float64)
+for b in (1e4, 5e5):
+    th = b ** (-torch.arange(0, 128, 2, dtype=torch.float64) / 128)
+    S = torch.exp(1j * torch.outer(rr, th)).cumsum(-1).abs()              # |S_j| for j = 1..64
+    axes[2].semilogx(rr, S.mean(-1), lw=1, label=f"b = {b:.0e}")
+axes[2].set(title="RoFormer decay factor, d_h = 128", xlabel="relative distance r", ylabel="(2/d_h) Σ_j |S_j|"); axes[2].legend()
+plt.tight_layout(); plt.show()
+
+for hd_, b, T_tr in [(16, 1e4, 64), (128, 1e4, 4096), (128, 5e5, 8192)]:
+    lam = 2 * math.pi * b ** (torch.arange(0, hd_, 2, dtype=torch.float64) / hd_)
+    print(f"d_h = {hd_:3d}, b = {b:.0e}, T_train = {T_tr:4d}: {(lam > T_tr).sum().item():2d} of {hd_ // 2} pairs never complete a turn in training")
+""")
+
+md(r"""
+- Left: pairs 0–2 cycle within 64 tokens (pair 2's wavelength is 63); pairs 3–7 turn by less than a full cycle over the training window (pair 3 by 0.32 turns, pair 7 by 0.02 rad). Beyond the dashed line, pairs 3–7 reach angles the trained model has never seen.
+- Middle: a larger base stretches all wavelengths except pair 0's. With $b = 5\cdot10^5$, 29 of Llama 3's 64 pairs never complete a turn within 8192 tokens (14 of 64 for $b=10^4$ at Llama 2's 4096).
+- Right: the decay factor falls with distance; with the larger base it stays high to larger $r$ (it is a bound, not the actual logit of a trained model).
+
+**The experiment.** Character-level Tiny Shakespeare (section 3's data). One model, five schemes: `none`, `learned` (table of 64 rows; positions $\ge 64$ reuse row 63, since the table has nothing else), `sinusoidal`, `alibi`, `rope`. 2 layers, $d=64$, 4 heads ($d_h=16$), causal, 600 steps of batch 32 at length 64, 3 seeds each. Evaluation: 64 validation windows of 512 characters; length $L$ uses their first $L$ characters, and we report the mean loss over all $L$ positions (as in the ALiBi paper). The attention below reuses section 3's `Block`, `RMSNorm`, `SwiGLU` and `apply_rope`; `Block.forward` hands its `rope` argument to the attention unchanged, so we use it to carry `(rope tables, ALiBi bias)`.
+""")
+
+code(r"""
+def rope_theta(head_dim, base=10000.0):
+    return base ** (-torch.arange(0, head_dim, 2, dtype=torch.float64) / head_dim)
+
+def rope_tables(pos, theta):   # cos, sin of the angles pos_m · θ_j, (T, d_h/2); positions may be fractional
+    ang = torch.outer(pos.double(), theta)
+    return ang.cos(), ang.sin()
+
+class PosAttention(nn.Module):
+    # causal attention; position from RoPE on q, k (rope = (cos, sin)) and/or an additive logit bias (H, T, T)
+    def __init__(self, d, n_heads):
+        super().__init__()
+        self.h, self.hd = n_heads, d // n_heads
+        self.qkv = nn.Linear(d, 3 * d, bias=False)
+        self.proj = nn.Linear(d, d, bias=False)
+
+    def forward(self, x, pos_ctx, causal=True, return_attn=False):
+        rope, bias = pos_ctx
+        B, T, D = x.shape
+        q, k, v = self.qkv(x).view(B, T, 3, self.h, self.hd).permute(2, 0, 3, 1, 4)    # (B, H, T, d_h) each
+        if rope is not None:
+            q, k = apply_rope(q, *rope), apply_rope(k, *rope)
+        if bias is None:
+            y = F.scaled_dot_product_attention(q, k, v, is_causal=True)
+        else:
+            y = F.scaled_dot_product_attention(q, k, v, attn_mask=bias.masked_fill(~causal_mask(T, x.device), float("-inf")))
+        return self.proj(y.transpose(1, 2).reshape(B, T, D)), None
+
+class PosGPT(nn.Module):
+    def __init__(self, vocab, scheme, d=64, n_layers=2, n_heads=4, train_len=64):
+        super().__init__()
+        self.scheme, self.h, self.hd, self.train_len = scheme, n_heads, d // n_heads, train_len
+        self.rope_mode, self.rope_scale = "plain", None      # context extension, used further below
+        self.emb = nn.Embedding(vocab, d)
+        if scheme == "learned":
+            self.pos = nn.Parameter(torch.randn(train_len, d) * 0.02)
+        self.blocks = nn.ModuleList([Block(d, n_heads) for _ in range(n_layers)])
+        for blk in self.blocks:
+            blk.attn = PosAttention(d, n_heads)
+        self.norm, self.head = RMSNorm(d), nn.Linear(d, vocab, bias=False)
+
+    def forward(self, idx):
+        T, dev = idx.shape[1], idx.device
+        x, rope, bias = self.emb(idx), None, None
+        if self.scheme == "learned":
+            x = x + self.pos[torch.arange(T, device=dev).clamp(max=self.train_len - 1)]
+        elif self.scheme == "sinusoidal":
+            x = x + sinusoidal_table(T, x.shape[-1]).float().to(dev)
+        elif self.scheme == "alibi":
+            bias = alibi_bias(T, self.h).float().to(dev)
+        elif self.scheme == "rope":
+            tabs = (rope_tables(torch.arange(T), rope_theta(self.hd)) if self.rope_mode == "plain"
+                    else extended_rope(T, self.hd, self.train_len, self.rope_mode, self.rope_scale))
+            rope = tuple(t.float().to(dev) for t in tabs)
+        for blk in self.blocks:
+            x, _ = blk(x, (rope, bias))
+        return self.head(self.norm(x))
+""")
+
+code(r"""
+def train_pos(model, steps=600, T=64, B=32, lr=3e-3):
+    opt = torch.optim.AdamW(model.parameters(), lr=lr, weight_decay=0.1, betas=(0.9, 0.95))
+    sched = torch.optim.lr_scheduler.OneCycleLR(opt, lr, total_steps=steps, pct_start=0.1)
+    for _ in range(steps):
+        x, y = get_batch(train_data, B, T)
+        loss = F.cross_entropy(model(x).flatten(0, 1), y.flatten())
+        opt.zero_grad(); loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+        opt.step(); sched.step()
+    return model
+
+torch.manual_seed(1234)
+x_eval, y_eval = get_batch(val_data, 64, 512)          # length L uses the first L characters of these windows
+EVAL_LENS = (64, 128, 256, 512)
+
+@torch.no_grad()
+def eval_pos(model):
+    # mean loss over all positions at each eval length, and the per-position loss at length 512
+    model.eval()
+    out = {L: F.cross_entropy(model(x_eval[:, :L]).flatten(0, 1), y_eval[:, :L].flatten()).item() for L in EVAL_LENS}
+    per_pos = F.cross_entropy(model(x_eval).transpose(1, 2), y_eval, reduction="none").mean(0).cpu()
+    model.train()
+    return out, per_pos
+
+SCHEMES, SEEDS = ("none", "learned", "sinusoidal", "alibi", "rope"), (0, 1, 2)
+results, per_pos, pos_models = {}, {}, {}
+t0 = time.time()
+for scheme in SCHEMES:
+    for seed in SEEDS:
+        torch.manual_seed(seed)
+        m = train_pos(PosGPT(vocab, scheme).to(device))
+        results[scheme, seed], per_pos[scheme, seed] = eval_pos(m)
+        pos_models[scheme, seed] = m
+    print(f"{scheme:10s} done ({time.time() - t0:.0f}s)")
+
+def table(rows, title):
+    print(f"{title:22s}" + "".join(f"   L = {L:<10d}" for L in EVAL_LENS))
+    for name, runs in rows.items():
+        cells = [np.array([r[L] for r in runs]) for L in EVAL_LENS]
+        print(f"{name:22s}" + "".join(f"   {c.mean():.3f} ± {c.std():.3f}" for c in cells))
+
+table({s: [results[s, sd] for sd in SEEDS] for s in SCHEMES}, "loss (nats/char)")
+""")
+
+code(r"""
+fig, axes = plt.subplots(1, 2, figsize=(12, 3.8))
+for s in SCHEMES:
+    mean = np.array([[results[s, sd][L] for L in EVAL_LENS] for sd in SEEDS])
+    axes[0].errorbar(EVAL_LENS, mean.mean(0), yerr=mean.std(0), marker="o", capsize=3, label=s)
+    curve = torch.stack([per_pos[s, sd] for sd in SEEDS]).mean(0)
+    axes[1].plot(np.convolve(curve.numpy(), np.ones(16) / 16, mode="valid"), lw=1, label=s)
+axes[0].set_xscale("log", base=2); axes[0].set_xticks(EVAL_LENS, [str(L) for L in EVAL_LENS])
+axes[0].set(title="mean loss vs eval length (train length 64)", xlabel="eval length L", ylabel="loss (nats/char)")
+axes[1].axvline(64, c="gray", ls="--", lw=1)
+axes[1].set(title="loss per position at L = 512 (moving average of 16)", xlabel="position", ylabel="loss (nats/char)")
+for ax in axes: ax.legend(fontsize=8)
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+Mean ± std over 3 seeds (loss in nats/char; the first 64 positions of every length are in-distribution, so the mean at $L$ dilutes the damage; the right panel shows it per position).
+- **In distribution ($L=64$):** RoPE 1.93 < ALiBi 2.02 < sinusoidal 2.08 < learned 2.23 < none 2.29. Every scheme beats NoPE, and RoPE is best by 0.09 nats.
+- **ALiBi is flat:** 2.02 at every length up to 8× the training length, the per-position loss stays at its in-distribution level. This is the result of the ALiBi paper, and it reproduces here. With $H=4$ the slopes are $\tfrac14,\tfrac1{16},\tfrac1{64},\tfrac1{256}$; beyond offset 64 the extra keys only receive larger penalties (weights near zero in the three fast heads), so the attention pattern over the recent tokens is nearly unchanged.
+- **Sinusoidal breaks at once:** the per-position loss jumps at position 64 to ≈ 3.1, worse than NoPE. The added vectors $p_m$, $m\ge 64$, are new inputs to $W_Q, W_K$ and the MLPs.
+- **Learned (clamped) degrades gradually:** all positions $\ge 64$ share one row, so the model sees many tokens "at position 63"; loss 2.80 at 512.
+- **RoPE holds to ≈ 100 and then breaks:** the per-position loss stays at 1.9 up to position ≈ 100 and rises to 3.4–3.7 beyond position 200, the worst at 512 (3.10). The break is not at 64. Next cell: the pair the model uses most has wavelength 199; its trained angles are $r\theta_3 \in [0, 2.0]$ rad, and $\cos(r\theta_3)$ decreases monotonically in $r$ only until $r\theta_3=\pi$, i.e. $r\approx 100$. Past that, $\cos$ rises again, so a token 150 back looks like a token 50 back.
+- **NoPE degrades slowly** (2.29 → 2.50): its position signal (the $1/(m+1)$ averaging) shifts smoothly with length. It is worse than ALiBi at every length; the claim that NoPE length-generalizes better than ALiBi and RoPE (Kazemnejad et al.) comes from small synthetic tasks and does not show on character-level text at this scale.
+""")
+
+md(r"""
+**Which rotary pairs does the trained model use?** For each pair $j$, the mean of $|q_j|\,|k_j|$ (the amplitude of the $j$-th sinusoid in the logit) over tokens, heads and both layers of the RoPE models, normalized to sum to 1.
+""")
+
+code(r"""
+@torch.no_grad()
+def pair_amplitudes(model, x):
+    qk = []
+    hooks = [blk.attn.qkv.register_forward_hook(lambda mod, inp, out: qk.append(out)) for blk in model.blocks]
+    model.eval(); model(x); model.train()
+    for h in hooks: h.remove()
+    amps = []
+    for out in qk:                                                      # (B, T, 3D) per layer
+        q, k, _ = out.view(*out.shape[:2], 3, model.h, model.hd // 2, 2).unbind(2)
+        amps.append((q.norm(dim=-1) * k.norm(dim=-1)).mean((0, 1, 2)))  # (d_h/2,)
+    a = torch.stack(amps).mean(0).cpu()
+    return a / a.sum()
+
+amp = torch.stack([pair_amplitudes(pos_models["rope", sd], x_eval[:, :64]) for sd in SEEDS])
+lam16 = 2 * math.pi / theta16
+for j in range(8):
+    print(f"pair {j}: wavelength {lam16[j].item():7.0f} tokens   amplitude share {amp[:, j].mean():.3f} ± {amp[:, j].std():.3f}")
+""")
+
+md(r"""
+Pair 3 (wavelength 199, the slowest pair that still turns by a visible angle within 64 tokens, 0.32 turns) carries the largest share, 0.27; pairs 0–2 (local offsets) 0.16–0.19 each; pairs 5–7, whose angle hardly changes over 64 tokens, have the smallest amplitude, 0.046 each. In this model the slow pairs are almost unused, and pair 3 serves as a monotone "how far back" signal. That is the pair whose angles leave the trained range first, and it explains where the RoPE curve breaks.
+""")
+
+md(r"""
+**Context extension for RoPE.** `extended_rope` returns the cos/sin tables for positions $0,\dots,T-1$ of a model trained on `train_len` positions, with scale $s$ (default $T/T_{\text{train}}$, recomputed per length, i.e. "dynamic" scaling):
+- `pi`: positions $m \to m/s$ (your TODO);
+- `ntk`: base $b \to b\,s^{d_h/(d_h-2)}$;
+- `parts`: $\theta_j \to \theta_j/s$ only for pairs with $\lambda_j > T_{\text{train}}$ (YaRN's rule with a hard threshold instead of the ramp, and no temperature).
+""")
+
+code(r"""
+def extended_rope(T, head_dim, train_len, mode, scale=None, base=10000.0):
+    s = scale if scale is not None else max(1.0, T / train_len)
+    pos, theta = torch.arange(T, dtype=torch.float64), rope_theta(head_dim, base)
+    if mode == "pi":
+        #>> position interpolation: positions m → m / s
+        pos = pos / s
+        #<<
+    elif mode == "ntk":
+        theta = rope_theta(head_dim, base * s ** (head_dim / (head_dim - 2)))
+    elif mode == "parts":
+        theta = torch.where(2 * math.pi / theta > train_len, theta / s, theta)
+    return rope_tables(pos, theta)
+""")
+
+code(r"""
+c_pi, s_pi = extended_rope(256, 16, 64, "pi")
+c_tr, s_tr = rope_cache(64, 16)
+print("PI at length 256: rows 0, 4, 8, ... equal the training rows 0, 1, 2, ...: max diff =",
+      max((c_pi[::4] - c_tr).abs().max().item(), (s_pi[::4] - s_tr).abs().max().item()))
+print("PI: row 1 is the fractional position 1/4: max |angle − θ/4| =", (torch.atan2(s_pi[1], c_pi[1]) - theta16 / 4).abs().max().item())
+th_ntk = rope_theta(16, 1e4 * 4 ** (16 / 14))
+print(f"NTK-aware, s = 4: θ_0 ratio {th_ntk[0] / theta16[0]:.3f} (unchanged), θ_7 ratio {th_ntk[-1] / theta16[-1]:.3f} (= 1/s)")
+""")
+
+md(r"""
+First without any training: the three rules applied to the trained RoPE models from above. Then a short fine-tune at length 256 (100 steps, batch 8, peak learning rate $10^{-3}$, about 2% of the pretraining compute), once with plain RoPE and once with PI at a fixed $s=4$ (as in the PI paper, the fine-tuned model keeps $s=4$ at every length).
+""")
+
+code(r"""
+import copy
+ext = {}
+for mode in ("plain", "pi", "ntk", "parts"):
+    ext[f"{mode}, no fine-tune"] = []
+    for sd in SEEDS:
+        pos_models["rope", sd].rope_mode = mode
+        ext[f"{mode}, no fine-tune"].append(eval_pos(pos_models["rope", sd])[0])
+        pos_models["rope", sd].rope_mode = "plain"
+
+t0 = time.time()
+for mode, scale in (("plain", None), ("pi", 4.0)):
+    ext[f"{mode}, fine-tuned 256"] = []
+    for sd in SEEDS:
+        torch.manual_seed(100 + sd)
+        m = copy.deepcopy(pos_models["rope", sd])
+        m.rope_mode, m.rope_scale = mode, scale
+        ext[f"{mode}, fine-tuned 256"].append(eval_pos(train_pos(m, steps=100, T=256, B=8, lr=1e-3))[0])
+print(f"fine-tuning: {time.time() - t0:.0f}s")
+table({"alibi (reference)": [results["alibi", sd] for sd in SEEDS], **ext}, "RoPE extension")
+
+fig, ax = plt.subplots(figsize=(7, 3.8))
+for name, runs in ext.items():
+    v = np.array([[r[L] for L in EVAL_LENS] for r in runs])
+    ax.errorbar(EVAL_LENS, v.mean(0), yerr=v.std(0), marker="o", capsize=3, ls="-" if "no fine" in name else "--", label=name)
+ax.set_xscale("log", base=2); ax.set_xticks(EVAL_LENS, [str(L) for L in EVAL_LENS])
+ax.set(title="RoPE context extension (trained at 64)", xlabel="eval length L", ylabel="loss (nats/char)"); ax.legend(fontsize=8)
+plt.tight_layout(); plt.show()
+""")
+
+md(r"""
+- **PI without fine-tuning is worse than doing nothing** (2.64 vs 2.02 at $L=128$). PI divides all angles by $s$, including pairs 0–2, which resolve neighbouring characters; a character-level model depends on them (half of the amplitude above). The PI paper also reports that PI needs fine-tuning.
+- **NTK-aware and by-parts scaling work without training up to 2×:** 1.93 / 1.96 at $L=128$ vs 1.93 in distribution. They leave the high frequencies alone and stretch only the slow pairs. At 4× and 8× they still lose 0.2–0.6 nats, less than plain RoPE (2.66, 3.10); by-parts is best at 512.
+- **Short fine-tune at 256 (100 steps):** plain RoPE reaches 1.97 at $L=256$ and keeps 1.96 at 64; PI with $s=4$ reaches 2.04 at 256 and costs 0.11 nats at $L=64$ (positions there are compressed too). The PI paper's result, that PI + fine-tuning beats fine-tuning plain RoPE, **does not reproduce at this scale**: 100 steps are enough for a 2-layer model to learn the new angles of the 2–3 pairs that matter, while PI permanently coarsens the local pairs it needs. At Llama scale, Chen et al. found direct fine-tuning extended the effective context only slowly (from 2048 to ≈ 2560 after 10k steps), which is the regime PI was designed for. Both fine-tuned models still degrade at 512, beyond their new training length.
+
+✏️ Train the RoPE model with `rope_theta(self.hd, 500.0)` and with `500000.0` instead of $10^4$ (change it in `PosGPT.forward`), and re-run the length table. Predict first from the wavelength plot: which base leaves fewer unseen angles at $L = 256$, and what does it cost at $L = 64$?
+""")
+
+md(r"""
+**Exam-style question**
+
+(a) A decoder LM with a learned absolute position table was trained on sequences of length 2048. Why can it not be run on 4096 tokens, while the same model with ALiBi or RoPE can at least be run? (b) What goes wrong with RoPE beyond the training length, in terms of the rotation angles of each pair? (c) What does position interpolation change, why does it need fine-tuning, and what does NTK-aware / by-parts scaling do differently?
+
+<<STUDENT>>
+✏️ Your answer:
+<</STUDENT>>
+<<SOLUTION>>
+(a) The learned table has one parameter vector per index $0,\dots,T_{\max}-1$; position 2048 has no row, so the forward pass is undefined (clamping or extrapolating the table gives vectors the model never saw; loss 2.80 vs 2.23 above). ALiBi's bias $-s_h|m-n|$ and RoPE's rotation $R_m$ are closed-form functions of the index, defined for every $m$, and both enter only through the offset $m-n$, so the model runs at any length.
+
+(b) Pair $j$ rotates by $r\theta_j$. Pairs with wavelength $2\pi/\theta_j < T_{\text{train}}$ have seen all angles; pairs with longer wavelength have seen only $[0, T_{\text{train}}\theta_j)$, and at longer offsets they produce angles outside this range. The logit $\sum_j |q_j||k_j|\cos(r\theta_j+\phi_j)$ then takes values the attention was not trained on; in particular $\cos$ is not monotone beyond $r\theta_j=\pi$, so distant keys can look near (our model: loss rises from 1.9 to ≈ 3.5 after offset ≈ 100, where pair 3 passes $\pi$).
+
+(c) PI maps $m\to m\,T_{\text{train}}/T$: all angles are back in the trained range, but adjacent tokens are now $\theta_j/s$ apart in every pair, so the high-frequency pairs lose resolution; the model needs fine-tuning to adapt to the compressed spacing (here PI without fine-tuning was worse than plain RoPE). NTK-aware scaling raises the base, $b\to b\,s^{d_h/(d_h-2)}$: $\theta_0$ is unchanged and the lowest frequency is divided by $s$, so local resolution is kept and only slow pairs are stretched. By-parts (YaRN) interpolates only the pairs with wavelength $> T_{\text{train}}$ and leaves the others exactly as trained; here both work without training at 2× (1.93–1.96 vs 1.93).
+<</SOLUTION>>
+""")
+
+md(r"""
+**Practical notes**
+- **Base.** Llama 2: $b = 10^4$, 4k context. Llama 3: $b = 5\cdot 10^5$ for 8k pretraining, then 128k by by-parts scaling (Llama 3.1). Code Llama: $10^6$. A larger base lengthens every wavelength except pair 0's: fewer pairs complete a turn within the context, less out-of-range angle at a longer length, slower decay of the RoFormer bound; the cost is coarser offset resolution in the middle pairs.
+- **Partial rotary.** Rotate only some pairs and leave the rest position-free: GPT-NeoX/Pythia rotate 25% of each head ([2204.06745](https://arxiv.org/abs/2204.06745)), GPT-J 64 of 256 dims, Phi-2 40%. DeepSeek's MLA adds a separate 64-dim rotated part to $q$ and $k$, because rotated keys cannot be absorbed into the compressed latent KV.
+- **KV cache.** The cache stores keys after rotation, $R_n k_n$; a new token rotates only its own $q, k$, at its absolute index. Changing the RoPE rule (PI/NTK scale) after the fact invalidates the cache. StreamingLLM ([2309.17453](https://arxiv.org/abs/2309.17453)) caches keys *before* rotation so it can re-index positions inside a sliding window.
+- **Precision.** Compute positions and angles in fp32, not bf16: bf16 has an 8-bit significand, so integer positions above 256 are rounded: positions 0–8191 collapse to 897 distinct values (below). fp32 represents integers exactly up to $2^{24}$, but the angle $m\theta_j$ is also rounded: at $m=10^6$ the fp32 angle of pair 1 is off by 0.05 rad, at $m=8000$ by $4\cdot10^{-4}$. Most implementations build the cos/sin table in fp32 and cast afterwards.
+""")
+
+code(r"""
+pos_all = torch.arange(8192)
+print(f"distinct values of positions 0..8191: fp32 {pos_all.float().unique().numel()}, bf16 {pos_all.bfloat16().unique().numel()}, fp16 {pos_all.half().unique().numel()}")
+th1 = rope_theta(128, 5e5)[1]                                   # second-fastest pair of a Llama 3 head
+for m_big in (8_000, 1_000_000):
+    ang64 = m_big * th1
+    ang32 = (torch.tensor(float(m_big)) * th1.float()).double()
+    print(f"m = {m_big:>9,}: angle m·θ_1 = {ang64.item():.5f} rad, fp32 error {abs(ang32 - ang64).item():.1e} rad")
+""")
+
+md(r"""
+## 7. ViT: patchify, then a Transformer encoder
 
 **Patchify.** An image `(B, C, H, W)` with patch size $p$ becomes `(B, N, C·p·p)` with $N = HW/p^2$, flattened in `(C, p, p)` order. A linear layer on these vectors **is** a convolution with `kernel_size = stride = p`, which is how ViT code implements it. That is the check.
 """)
@@ -678,7 +1104,7 @@ Explain why ViT needs positional embeddings while a standard CNN does not. Refer
 ✏️ Your answer:
 <</STUDENT>>
 <<SOLUTION>>
-Self-attention treats its input as a **set**: it is permutation-equivariant (previous section), and with [CLS] or mean pooling the prediction is permutation-invariant. Without position embeddings, shuffling the patches gives exactly the same output, so the model cannot tell where a patch was, nor which patches are neighbours. The embeddings attach each token's location to its content. A convolution is defined on the 2-D grid: each output combines a fixed $K\times K$ neighbourhood, and the weight of each neighbour is tied to its relative offset, so the spatial layout (locality and relative position) is built into the operation, and stacked layers plus pooling turn it into global position. Check below: with its position embeddings removed, our trained TinyViT gives identical logits (up to float32 round-off) for an image and its patch-shuffled version; with them, the logits change by up to ~3. Accuracy on shuffled images, however, stays at ≈ 0.50: after 8 epochs on 10k images this small ViT classifies mostly from the bag of patch contents and has learned little use of their layout, the same missing locality prior as above.
+Self-attention treats its input as a **set**: it is permutation-equivariant (section 5), and with [CLS] or mean pooling the prediction is permutation-invariant. Without position embeddings, shuffling the patches gives exactly the same output, so the model cannot tell where a patch was, nor which patches are neighbours. The embeddings attach each token's location to its content. A convolution is defined on the 2-D grid: each output combines a fixed $K\times K$ neighbourhood, and the weight of each neighbour is tied to its relative offset, so the spatial layout (locality and relative position) is built into the operation, and stacked layers plus pooling turn it into global position. Check below: with its position embeddings removed, our trained TinyViT gives identical logits (up to float32 round-off) for an image and its patch-shuffled version; with them, the logits change by up to ~3. Accuracy on shuffled images, however, stays at ≈ 0.50: after 8 epochs on 10k images this small ViT classifies mostly from the bag of patch contents and has learned little use of their layout, the same missing locality prior as above.
 <</SOLUTION>>
 """)
 
@@ -712,7 +1138,7 @@ print(f"accuracy on {len(labels)} test images: original {acc_orig:.3f}, patch-sh
 """)
 
 md(r"""
-## 7. Inside the trained mini-GPT: logit lens and attention sinks
+## 8. Inside the trained mini-GPT: logit lens and attention sinks
 
 **Logit lens** (nostalgebraist, 2020). The residual stream after every block has the same shape as the final one. Apply the model's own final norm and unembedding to it, $\ \mathrm{softmax}(W_U\,\mathrm{RMSNorm}(x^{(\ell)}))$, and read it as a next-character prediction. Question: at which layer does the right next character appear?
 """)
@@ -820,7 +1246,7 @@ md(r"""
 """)
 
 md(r"""
-## 8. If time: the MoE mini-GPT, with and without the balancing loss
+## 9. If time: the MoE mini-GPT, with and without the balancing loss
 
 Replace every SwiGLU in the mini-GPT by an `MoE` with 4 experts, top-2, each expert half the hidden size (same active FFN parameters per token as the dense model). Train two copies for 200 steps: $\alpha=0$ and $\alpha=0.01$ on $\sum_\ell \mathcal{L}_{\text{aux}}^{(\ell)}$. Compare the expert load.
 """)
@@ -856,12 +1282,13 @@ md(r"""
 - The 2026 block changes only parts of the 2017 one: pre-norm with RMSNorm, SwiGLU, RoPE on $q,k$, GQA. Each piece is a few lines; RoPE's check is that the score depends only on the offset.
 - GQA is MHA with KV heads repeated; MoE is a router + top-$k$ + a balancing loss $E\sum_i f_iP_i$ that equals 1 when the experts are evenly used.
 - Without positions a Transformer block is permutation-equivariant (error ~1e-16); RoPE or a causal mask breaks the symmetry, and that is the only way the model knows token order.
+- Position enters at the input (learned, sinusoidal), on the logits (T5, ALiBi) or on $q,k$ (RoPE). RoPE's logit is $\mathrm{Re}\sum_j q_j\bar k_j e^{i(m-n)\theta_j}$: fixed frequencies, content sets amplitudes and phases. Trained at 64 characters: RoPE is best in distribution (1.93) and breaks at offset ≈ 100, where its most-used pair passes $\pi$; ALiBi stays at 2.02 to 8× the length; sinusoidal and learned tables fail past 64. NTK-aware / by-parts scaling recover RoPE at 2× without training; PI needs fine-tuning, and at this scale plain fine-tuning was better.
 - ViT = patchify (a strided convolution) + the same encoder blocks. On 10k CIFAR images it is data-starved; the learned position embeddings are where the 2D structure has to come from.
 - Inside the mini-GPT, the logit lens shows the next-character prediction forming layer by layer. Attention sinks (most of a head's attention on the first token) are absent in our small model and present in most upper layers of SmolLM2-135M.
 
 **Further watching:** 3Blue1Brown, [*Transformers, the tech behind LLMs* (ch. 5)](https://www.youtube.com/watch?v=wjZofJX0v4M) and [*Attention in transformers, step-by-step* (ch. 6)](https://www.youtube.com/watch?v=eMlx5fFNoYc); Karpathy, [*Let's build GPT: from scratch, in code, spelled out*](https://www.youtube.com/watch?v=kCc8FmEb1nY) (section 3 follows it, with the 2026 block); Umar Jamil, [*Attention is all you need (Transformer): model explanation, math, inference and training*](https://www.youtube.com/watch?v=bCz4OMemCcA).
 
-**Further reading:** Stanford CME 295 (2025), [Lecture 1: the Transformer](https://cme295.stanford.edu/slides/fall25-cme295-lecture1.pdf) and [Lecture 2: MHA/MQA/GQA, RoPE](https://cme295.stanford.edu/slides/fall25-cme295-lecture2.pdf).
+**Further reading:** Su et al., [RoFormer](https://arxiv.org/abs/2104.09864) (2104.09864); Press et al., [ALiBi](https://arxiv.org/abs/2108.12409) (2108.12409); Chen et al., [position interpolation](https://arxiv.org/abs/2306.15595) (2306.15595); Peng et al., [YaRN](https://arxiv.org/abs/2309.00071) (2309.00071); Kazemnejad et al., [NoPE and length generalization](https://arxiv.org/abs/2305.19466) (2305.19466); Barbero et al., [Round and round we go! What makes rotary positional encodings useful?](https://arxiv.org/abs/2410.06205) (2410.06205); EleutherAI blog, [Rotary embeddings: a relative revolution](https://blog.eleuther.ai/rotary-embeddings/). Stanford CME 295 (2025), [Lecture 1: the Transformer](https://cme295.stanford.edu/slides/fall25-cme295-lecture1.pdf) and [Lecture 2: MHA/MQA/GQA, RoPE](https://cme295.stanford.edu/slides/fall25-cme295-lecture2.pdf).
 """)
 
 for k, p in B.write(STEM).items():
