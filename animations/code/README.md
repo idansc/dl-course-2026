@@ -27,6 +27,7 @@ bmi (kg/m²) and s5 (log serum triglycerides) predicting disease progression aft
 | MomentumNesterov | `optim_real.py` | `momentum_nesterov(learning_rate, rho, num_steps)`, `sgd_momentum`, `nesterov` | `learning_rate=0.07`: Nesterov diverges (its limit for ρ = 0.9 is 0.069); `rho=0.5` or `0.99` |
 | AdaptiveMethods | `optim_real.py` | `adaptive_methods(num_steps, lr_grid, window)`, `adagrad`, `rmsprop`, `adam` | `decay_rate=0.9` in `rmsprop`; delete Adam's two bias-correction lines; `window=None` lets the sweep pick lr = 100 for AdaGrad |
 | MuonOrthogonalize | `muon_demo.py` (wrapper around `muon_cifar.py`) | `muon_iterations(steps)`, `ns_map`; `momentum_buffer`, `zeropower_via_newtonschulz5` | `steps=10`: the values keep moving inside a band around 1; coefficients (1.5, −0.5, 0) converge to exactly 1 but need many more steps |
+| ConvRunningExample | `conv_running_example.py` | `conv2d(image, kernel, stride, padding)`, `check_with_torch` | `stride=2`: 2×2 output [[4, 4], [2, 4]]; `padding=1`: 5×5 output, the same size as the input; the flipped kernel `kernel[::-1, ::-1]` (textbook convolution) gives the same output here, because this filter is symmetric |
 
 `optim_real.py` writes the optimizers as on the slides (`sgd`, `sgd_momentum`, `nesterov`, `adagrad`, `rmsprop`, `adam`);
 each takes `compute_gradient(w)` and returns the whole path. `cifar_experiment.py` and `muon_cifar.py` are the code of the
