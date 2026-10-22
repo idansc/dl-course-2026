@@ -1,12 +1,13 @@
 """Code for the static Muon slides of lecture 2: every number and chart on them. The matrix is the one of muon_cifar.py,
 G = W1's SGD-momentum buffer (100 x 3072) after one epoch of the 2-layer MLP on CIFAR-10.
 
-  "More recent methods: Muon"        update_spectrum, one_minibatch: few directions carry the update, and why
-                                     (dL/dW1 = sum over the batch of ds_i x_i^T: every row is a mix of input images)
+  "More recent methods: Muon"        update_spectrum, pattern_images, one_minibatch: each direction of G is an input
+                                     pattern (v_k as a 32 x 32 image) with a strength sigma_k; a few blurry patterns carry
+                                     the update, and why (dL/dW1 = sum over the batch of ds_i x_i^T: rows are mixes of images)
   "Adam evens out the weights ..."   sign_example: 8 entries of G and their signs; G's singular values -> U V^T (all 1)
-  "Why the same step ..."            same_output_budget: first-order loss decrease of steps with the same sigma_max
-  "Computing U V^T fast"             newton_schulz_curves: what 1, 2, 3, 5 Newton-Schulz steps do to a singular value,
-                                     and where the 100 singular values of G land after 5 steps
+  "Why the same step ..."            same_output_budget: first-order loss decrease of steps with the same cap on the
+                                     output change (sigma_max)
+  "Computing it fast ..."            newton_schulz_curves: the 100 strengths of G after each of the 5 Newton-Schulz steps
 
 Run:  python muon_explained.py   -> prints the numbers, writes data/muon_explained.json, saves figures/muon_explained.png
 Try:  same_output_budget(torch.randn(100, 3072)): a random matrix has a flat spectrum, and U V^T gains only about 1.2x
@@ -24,6 +25,7 @@ from muon_cifar import momentum_buffer, zeropower_via_newtonschulz5
 from muon_demo import muon_iterations, ns_map
 
 OUT = Path(__file__).with_name("data") / "muon_explained.json"
+FIG = Path(__file__).with_name("figures")
 
 
 def energy(s, k):
@@ -35,6 +37,23 @@ def update_spectrum(G):
     s = torch.linalg.svdvals(G.double())
     return dict(shape=list(G.shape), sv_rel=(s / s[0]).tolist(), top1=energy(s, 1), top5=energy(s, 5),
                 top10=energy(s, 10))
+
+
+def pattern_images(G, ks=(1, 2, 3, 30, 60, 90), size=192, out_dir=FIG / "muon_patterns"):
+    """The input side of direction k: v_k (3072 numbers) is a 32 x 32 colour image, the input pattern for which the update
+    changes the layer's output by sigma_k (|G v_k| = sigma_k). Saved as PNGs: mid-grey = 0, each with its own contrast;
+    the sign of an SVD pair is arbitrary, so a pattern and its negative are the same direction."""
+    from PIL import Image
+    U, S, Vh = torch.linalg.svd(G.double(), full_matrices=False)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    out = {}
+    for k in ks:
+        v = Vh[k - 1].numpy().reshape(3, 32, 32).transpose(1, 2, 0)          # CIFAR rows: 1024 R, 1024 G, 1024 B
+        img = np.round(255 * (0.5 + 0.5 * v / np.abs(v).max())).astype(np.uint8)
+        path = out_dir / f"pattern_{k:03d}.png"
+        Image.fromarray(img).resize((size, size), Image.NEAREST).save(path)
+        out[str(k)] = dict(path=str(path.relative_to(Path(__file__).parent)), sigma_rel=float(S[k - 1] / S[0]))
+    return out
 
 
 def one_minibatch(N=128, seed=0):
@@ -87,12 +106,13 @@ def newton_schulz_curves(G, steps=(1, 2, 3, 5), n=201):
     r = muon_iterations(steps=5, M=G)
     real_in, real_out = r["sv"][0], r["sv"][-1]
     assert np.allclose(real_out, [ns_map(ns_map(ns_map(ns_map(ns_map(s))))) for s in real_in], atol=1e-3)
-    return dict(grid=grid.tolist(), curves=curves, real_in=real_in.tolist(), real_out=real_out.tolist())
+    return dict(grid=grid.tolist(), curves=curves, real_in=real_in.tolist(), real_out=real_out.tolist(),
+                steps=r["sv"].tolist())                     # steps[t][k-1]: strength of direction k after t steps
 
 
 if __name__ == "__main__":
     G = momentum_buffer()
-    res = dict(spectrum=update_spectrum(G), one_minibatch=one_minibatch(), sign_example=sign_example(G),
+    res = dict(spectrum=update_spectrum(G), patterns=pattern_images(G), one_minibatch=one_minibatch(), sign_example=sign_example(G),
                budget=same_output_budget(G), newton_schulz=newton_schulz_curves(G))
     sp, mb, bd, ns = res["spectrum"], res["one_minibatch"], res["budget"], res["newton_schulz"]
     print(f"G = W1 momentum buffer {sp['shape']}: top-1 direction {100 * sp['top1']:.0f}% of the energy, "
