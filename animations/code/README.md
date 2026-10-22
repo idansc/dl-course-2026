@@ -1,10 +1,13 @@
 # Code behind the week-1 animations (lecture 2)
 
-Every clip in `../renders/w01/` has a runnable file here. The Manim scenes import these files, so each script prints
+Every clip in `../renders/w01/` has a runnable file here. The Manim scenes import these files (BackpropFlow and
+SpaceWarping use the same constants inline), so each script prints
 the numbers its clip shows and saves a static version of the clip to `figures/`. Run from this folder with the
 course venv, e.g.
 
     ../../.venv/bin/python optim_real.py
+
+Clean versions for the slides (no title, captions or numbers; to embed in place of the GIFs) live in `../renders/w01/clean/`: the same code, rendered with `DLC_CLEAN=1`.
 
 Data: CIFAR-10 from `tutorials/data/cifar-10-batches-py` (downloaded on first use by `cifar_experiment.py`), and the
 diabetes data from scikit-learn (442 patients, Efron et al. 2004, "Least Angle Regression"; bundled, no download):

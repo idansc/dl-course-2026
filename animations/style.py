@@ -1,5 +1,7 @@
 """Shared look for all course animations: white background (matches the slide template), one palette,
-Arial labels, LaTeX math. Import with `from style import *` inside a scene file."""
+Arial labels, LaTeX math. Import with `from style import *` inside a scene file.
+Clean mode (DLC_CLEAN=1 manim ...): the versions embedded inside the lecture slides in place of GIFs, with no title
+and no captions; scenes also drop their own explanatory text and enlarge the visual when CLEAN is set."""
 from manim import *
 import numpy as np
 
@@ -9,6 +11,7 @@ if os.environ.get("DLC_PREVIEW"):          # fast drafts: DLC_PREVIEW=1 manim ..
     config.pixel_width, config.pixel_height, config.frame_rate = 854, 480, 15
 else:
     config.pixel_width, config.pixel_height, config.frame_rate = 1920, 1080, 30
+CLEAN = bool(os.environ.get("DLC_CLEAN"))  # slide versions: DLC_CLEAN=1 manim ... (renders/wNN/clean/)
 
 INK = "#1F2937"        # text and outlines
 MUTED = "#9CA3AF"      # secondary text, grids
@@ -26,7 +29,9 @@ Tex.set_default(color=INK)
 
 
 def title(scene, text, sub=None):
-    """Top-left title (and optional subtitle) that stays on screen."""
+    """Top-left title (and optional subtitle) that stays on screen. Clean mode: nothing (an empty group)."""
+    if CLEAN:
+        return VGroup()
     t = Text(text, font_size=40, weight=BOLD).to_corner(UL, buff=0.45)
     grp = VGroup(t)
     if sub:
@@ -37,14 +42,31 @@ def title(scene, text, sub=None):
 
 
 def caption(text, color=INK, size=28):
-    """Bottom caption line for the key idea of the current step."""
+    """Bottom caption line for the key idea of the current step. Clean mode: an invisible (empty) mobject."""
+    if CLEAN:
+        return VMobject()
     return Text(text, font_size=size, color=color).to_edge(DOWN, buff=0.45)
 
 
 def swap_caption(scene, old, text, **kw):
+    """Clean mode: the same 0.6 s pause, no text."""
     new = caption(text, **kw)
+    if CLEAN:
+        scene.wait(0.6)
+        return new
     scene.play(FadeOut(old, shift=0.1 * UP), FadeIn(new, shift=0.1 * UP), run_time=0.6)
     return new
+
+
+def clean_frame(scene, center=(0.0, 0.0), height=None):
+    """Clean mode only: centre the camera on `center` and, if `height` is given, zoom so that the frame is that tall
+    (16:9 kept). Call it first in construct(), before anything is drawn. No effect without DLC_CLEAN."""
+    if not CLEAN:
+        return
+    scene.camera.frame_center = np.array([center[0], center[1], 0.0])
+    if height:
+        scene.camera.frame_height = height
+        scene.camera.frame_width = height * config.frame_width / config.frame_height
 
 
 def token_row(words, color=INK, fill=SOFT, size=26, buff=0.18, width=None):

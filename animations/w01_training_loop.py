@@ -1,6 +1,7 @@
 """Lecture 2, "the training loop" (linear classifier + 2-layer MLP on CIFAR-10, loss, backprop, optimizers).
 Render one scene:
     manim -qh --disable_caching -o TrainingLoop w01_training_loop.py TrainingLoop
+Slide version without words (renders/w01/clean/): DLC_CLEAN=1 and a separate --media_dir per parallel run.
 Every number on screen comes from the runnable student code in code/ (single source of truth; this file only draws):
 code/training_loop.py (re-runs the lecture's CIFAR-10 loop, ~10 s; identical to p2_training_loop_src/results.json),
 code/adam_bias_correction.py, code/matrix_backprop.py (identical to p2_training_loop_src/bp_check.json).
@@ -21,17 +22,24 @@ GRID = "#D1D5DB"      # inactive outline in the deck's loop diagram
 
 def mcaption(markup, color=INK, size=28):
     """caption() with Pango markup, for sub/superscripts that Arial has no Unicode glyph for."""
+    if CLEAN:
+        return VMobject()
     return MarkupText(markup, font=FONT, font_size=size, color=color).to_edge(DOWN, buff=0.45)
 
 
 def swap_mcaption(scene, old, markup, **kw):
     new = mcaption(markup, **kw)
+    if CLEAN:                                  # the same pause, no text
+        scene.wait(0.6)
+        return new
     scene.play(FadeOut(old, shift=0.1 * UP), FadeIn(new, shift=0.1 * UP), run_time=0.6)
     return new
 
 
 def title_markup(scene, text, sub):
     """title() with a Pango-markup subtitle."""
+    if CLEAN:
+        return VGroup()
     t = Text(text, font_size=40, weight=BOLD).to_corner(UL, buff=0.45)
     s = MarkupText(sub, font=FONT, font_size=24, color=MUTED).next_to(t, DOWN, aligned_edge=LEFT, buff=0.15)
     grp = VGroup(t, s)
@@ -100,18 +108,25 @@ class TrainingLoop(Scene):
         FORMS = [r"s = Wx + b", r"L = -\log p_y", r"\partial L / \partial W",
                  r"W \leftarrow W - \alpha\, \partial L / \partial W"]
         COLS = [BLUE_, ORANGE_, PURPLE_, GREEN_]
-        BW, BH, GAP, X0, RY = 2.5, 1.08, 0.45, -4.9, 1.55
+        if CLEAN:      # slide version: names only in the boxes, no counter; the loop higher, its outputs larger
+            BW, BH, GAP, X0, RY = 2.5, 1.0, 0.45, -4.9, 2.55
+            SX, SY = -5.95, -0.8
+        else:
+            BW, BH, GAP, X0, RY = 2.5, 1.08, 0.45, -4.9, 1.55
+            SX, SY = -5.95, -1.2              # minibatch slot x; y of the row of per-step outputs
         xs = [X0 + BW / 2 + i * (BW + GAP) for i in range(4)]
-        SX, SY = -5.95, -1.2                  # minibatch slot x; y of the row of per-step outputs
         boxes = VGroup()
         for i in range(4):
             r = RoundedRectangle(corner_radius=0.12, width=BW, height=BH, stroke_color=COLS[i], stroke_width=2,
                                  fill_color=COLS[i], fill_opacity=1).move_to([xs[i], RY, 0])
-            nm = Text(NAMES[i], font_size=29, weight=BOLD, color=WHITE)
-            fm = MathTex(FORMS[i], font_size=31, color=WHITE)
-            if fm.width > BW - 0.24:
-                fm.scale_to_fit_width(BW - 0.24)
-            VGroup(nm, fm).arrange(DOWN, buff=0.13).move_to(r)
+            if CLEAN:
+                nm, fm = Text(NAMES[i], font_size=34, weight=BOLD, color=WHITE).move_to(r), VMobject()
+            else:
+                nm = Text(NAMES[i], font_size=29, weight=BOLD, color=WHITE)
+                fm = MathTex(FORMS[i], font_size=31, color=WHITE)
+                if fm.width > BW - 0.24:
+                    fm.scale_to_fit_width(BW - 0.24)
+                VGroup(nm, fm).arrange(DOWN, buff=0.13).move_to(r)
             boxes.add(VGroup(r, nm, fm))
 
         def arrow(a, b, col):
@@ -126,7 +141,7 @@ class TrainingLoop(Scene):
         ret_line = polyline(ret_pts, stroke_color=TEAL, stroke_width=4)
         ret_tip = Triangle(stroke_width=0, fill_color=TEAL, fill_opacity=1).stretch_to_fit_width(0.24)
         ret_tip.stretch_to_fit_height(0.2).move_to([SX, yend, 0], aligned_edge=DOWN)
-        rep_lab = Text("repeat", font_size=22, color=TEAL).move_to([-0.2, yr, 0]).set_z_index(7)
+        rep_lab = Text("repeat", font_size=26 if CLEAN else 22, color=TEAL).move_to([-0.2, yr, 0]).set_z_index(7)
         rep_bg = BackgroundRectangle(rep_lab, color=WHITE, fill_opacity=1, buff=0.1).set_z_index(6)
 
         def focus(k):
@@ -164,37 +179,38 @@ class TrainingLoop(Scene):
             return g
 
         smax = max(np.abs(s["scores"]).max() for s in shown)
-        bw_, bstep = 0.18, 0.235
+        bw_, bstep, bh = (0.2, 0.25, 1.3) if CLEAN else (0.18, 0.235, 0.8)
         bx0 = xs[0] - (9 * bstep + bw_) / 2
 
         def score_bars(scores):
             g = VGroup()
             for i, s in enumerate(scores):
-                h = max(0.03, abs(s) / smax * 0.8)
+                h = max(0.03, abs(s) / smax * bh)
                 g.add(Rectangle(width=bw_, height=h, stroke_width=0, fill_color=BLUE_, fill_opacity=0.9)
                       .move_to([bx0 + bw_ / 2 + i * bstep, SY + (h / 2 if s >= 0 else -h / 2), 0]))
             return g
 
         baseline = Line([bx0 - 0.1, SY, 0], [bx0 + 9 * bstep + bw_ + 0.1, SY, 0], color=MUTED, stroke_width=2)
-        CELL, CGAP = 0.44, 0.05
+        CELL, CGAP = (0.52, 0.05) if CLEAN else (0.44, 0.05)
         grads = [image_grid([purple_heat(g) for g in gm / gm.max()], CELL, CGAP, [xs[2], SY, 0]) for gm in gmaps]
         Wgrid = image_grid(W_init, CELL, CGAP, [xs[3], SY, 0])
         lab_y = SY + CELL + CGAP / 2 + 0.3
-        g_lab = MathTex(r"\partial L/\partial W", font_size=30, color=PURPLE_).move_to([xs[2], lab_y, 0])
-        W_lab = MathTex("W", font_size=32, color=GREEN_).move_to([xs[3], lab_y, 0])
+        g_lab = MathTex(r"\partial L/\partial W", font_size=34 if CLEAN else 30, color=PURPLE_).move_to([xs[2], lab_y, 0])
+        W_lab = MathTex("W", font_size=36 if CLEAN else 32, color=GREEN_).move_to([xs[3], lab_y, 0])
 
         def loss_tex(v):
-            return MathTex(rf"L = {v:.3f}", font_size=46, color=ORANGE_).move_to([xs[1], SY, 0])
+            return MathTex(rf"L = {v:.3f}", font_size=58 if CLEAN else 46, color=ORANGE_).move_to([xs[1], SY, 0])
 
         it = ValueTracker(1)
-        counter = always_redraw(lambda: Text(f"iteration {int(round(it.get_value())):,}", font_size=28, color=TEAL)
-                                .to_edge(RIGHT, buff=0.5).match_y(hdr[0]))
+        if not CLEAN:
+            counter = always_redraw(lambda: Text(f"iteration {int(round(it.get_value())):,}", font_size=28,
+                                                 color=TEAL).to_edge(RIGHT, buff=0.5).match_y(hdr[0]))
         state = {"mb": stack(thumbs[0])}
 
         def forward(k, rt, pre=()):
             """the minibatch flies into the Model; the 10 scores of its first image come out"""
             mb = state["mb"]
-            ref = picture(thumbs[k][0], 0.8, nearest=True).move_to([SX, SY, 0])
+            ref = picture(thumbs[k][0], 1.1 if CLEAN else 0.8, nearest=True).move_to([SX, SY, 0])
             ref = Group(ref, SurroundingRectangle(ref, buff=0.03, color=MUTED, stroke_width=1))
             bars = score_bars(shown[k]["scores"])
             anims = [FadeOut(c, target_position=boxes[0].get_left() + 0.3 * RIGHT, scale=0.15) for c in mb]
@@ -260,7 +276,8 @@ class TrainingLoop(Scene):
                   LaggedStart(*[GrowArrow(a) for a in arrows], lag_ratio=0.15),
                   Create(ret_line), FadeIn(ret_tip), FadeIn(rep_bg), FadeIn(rep_lab), run_time=1.5)
         cap = caption("minibatch: 128 CIFAR-10 images", color=BLUE_)
-        self.play(FadeIn(state["mb"], shift=0.4 * RIGHT), FadeIn(cap), FadeIn(counter), run_time=0.8)
+        self.play(FadeIn(state["mb"], shift=0.4 * RIGHT), FadeIn(cap), *([] if CLEAN else [FadeIn(counter)]),
+                  run_time=0.8)
         self.wait(0.4)
 
         # ---- iteration 1, slowly
@@ -288,15 +305,18 @@ class TrainingLoop(Scene):
         self.wait(0.3)
 
         # ---- fast-forward: 20 epochs
-        ax = Axes(x_range=[0, 20, 5], y_range=[1.4, 2.4, 0.2], x_length=7.3, y_length=2.15,
-                  axis_config={"stroke_color": MUTED, "include_tip": False, "font_size": 22},
+        afs = 26 if CLEAN else 22
+        ax = Axes(x_range=[0, 20, 5], y_range=[1.4, 2.4, 0.2], x_length=7.6 if CLEAN else 7.3,
+                  y_length=3.2 if CLEAN else 2.15,
+                  axis_config={"stroke_color": MUTED, "include_tip": False, "font_size": afs},
                   x_axis_config={"numbers_to_include": [0, 5, 10, 15, 20]},
                   y_axis_config={"numbers_to_include": [1.6, 2.0, 2.4],
-                                 "decimal_number_config": {"num_decimal_places": 1}}).move_to([-2.1, -1.45, 0])
+                                 "decimal_number_config": {"num_decimal_places": 1}}) \
+            .move_to([-2.0, -1.75, 0] if CLEAN else [-2.1, -1.45, 0])
         for num in [*ax.x_axis.numbers, *ax.y_axis.numbers]:
             num.set_color(INK)
-        xl = Text("epoch", font_size=22, color=MUTED).next_to(ax.x_axis.get_right(), RIGHT, buff=0.15)
-        yl = Text("loss", font_size=22, color=ORANGE_).next_to(ax.y_axis.get_top(), UP, buff=0.1)
+        xl = Text("epoch", font_size=afs, color=MUTED).next_to(ax.x_axis.get_right(), RIGHT, buff=0.15)
+        yl = Text("loss", font_size=afs, color=ORANGE_).next_to(ax.y_axis.get_top(), UP, buff=0.1)
         il = np.array(hist["iter_loss"])
         il_it = np.array([e * ipe + 10 * j for e in range(20) for j in range(len(il) // 20)])   # 0-based iteration
         tl = np.array(hist["train_loss"])
@@ -324,7 +344,7 @@ class TrainingLoop(Scene):
                 cell.pixel_array = rgba(np.round(a))
 
         start_dot = Dot(ax.c2p(il_it[2] / ipe, il[2]), radius=0.06, color=ORANGE_)
-        CELL2, CGAP2, WC = 0.6, 0.06, np.array([4.95, -1.35, 0])
+        CELL2, CGAP2, WC = (0.7, 0.07, np.array([4.95, -1.75, 0])) if CLEAN else (0.6, 0.06, np.array([4.95, -1.35, 0]))
         cap = next_caption(cap, f"repeat: 20 epochs, {n_it:,} steps", TEAL, None)
         self.play(FadeOut(state["bars"]), FadeOut(baseline), FadeOut(state["ref"]), FadeOut(state["grad"]),
                   FadeOut(g_lab), Create(ax), FadeIn(xl), FadeIn(yl),
@@ -343,8 +363,11 @@ class TrainingLoop(Scene):
                   phase.animate(rate_func=linear).set_value(6), run_time=6.0)
         Wgrid.clear_updaters()
         tr.clear_updaters()
-        end = MathTex(f"{tl[-1]:.2f}", font_size=32, color=ORANGE_).next_to(ax.c2p(20, tl[-1]), RIGHT, buff=0.15)
-        self.play(FadeOut(runners), FadeOut(tr[-1]), FadeIn(end, shift=0.1 * RIGHT), run_time=0.5)
+        if CLEAN:      # no end value
+            self.play(FadeOut(runners), FadeOut(tr[-1]), run_time=0.5)
+        else:
+            end = MathTex(f"{tl[-1]:.2f}", font_size=32, color=ORANGE_).next_to(ax.c2p(20, tl[-1]), RIGHT, buff=0.15)
+            self.play(FadeOut(runners), FadeOut(tr[-1]), FadeIn(end, shift=0.1 * RIGHT), run_time=0.5)
         cap = swap_caption(self, cap, f"after 20 epochs: test accuracy {100 * hist['test_acc']:.1f}%", color=TEAL)
         self.wait(2.5)
 
@@ -370,23 +393,28 @@ class AdamBiasCorrection(Scene):
         uu = np.log10(S[:, 0])
         U = np.log10(T)
 
+        if CLEAN:      # slide version: taller panels, no values at the marked steps; curve labels and legend only
+            XL, YL, PY, HY, XC, z = 5.6, 4.9, -0.4, 2.55, (-3.5, 3.6), 1.15
+        else:
+            XL, YL, PY, HY, XC, z = 5.3, 3.3, -0.6, 1.45, (-3.45, 3.55), 1
+
         def panel(xc, ymax, ystep, nums):
-            ax = Axes(x_range=[0, U, 1], y_range=[0, ymax, ystep], x_length=5.3, y_length=3.3,
-                      axis_config={"stroke_color": MUTED, "include_tip": False, "font_size": 22},
+            ax = Axes(x_range=[0, U, 1], y_range=[0, ymax, ystep], x_length=XL, y_length=YL,
+                      axis_config={"stroke_color": MUTED, "include_tip": False, "font_size": 22 * z},
                       y_axis_config={"numbers_to_include": nums,
                                      "decimal_number_config": {"num_decimal_places": 1 if ystep < 1 else 0}}
-                      ).move_to([xc, -0.6, 0])
+                      ).move_to([xc, PY, 0])
             for num in ax.y_axis.numbers:
                 num.set_color(INK)
-            xl = VGroup(*[MathTex(s, font_size=24).next_to(ax.c2p(u, 0), DOWN, buff=0.15)
+            xl = VGroup(*[MathTex(s, font_size=24 * z).next_to(ax.c2p(u, 0), DOWN, buff=0.15)
                           for u, s in [(0, "1"), (1, "10"), (2, "100"), (3, "1000")]])
-            tl = MathTex("t", font_size=28, color=MUTED).next_to(ax.c2p(U, 0), RIGHT, buff=0.15)
+            tl = MathTex("t", font_size=28 * z, color=MUTED).next_to(ax.c2p(U, 0), RIGHT, buff=0.15)
             return ax, VGroup(ax, xl, tl)
 
-        axL, gL = panel(-3.45, 1.2, 0.5, [0.5, 1.0])
-        axR, gR = panel(3.55, 8, 1, [1, 2, 4, 6, 8])
-        gL.add(Text("moments", font_size=24).move_to([axL.get_center()[0], 1.45, 0]))
-        gR.add(Text("step size / lr", font_size=24).move_to([axR.get_center()[0], 1.45, 0]))
+        axL, gL = panel(XC[0], 1.2, 0.5, [0.5, 1.0])
+        axR, gR = panel(XC[1], 8, 1, [1, 2, 4, 6, 8])
+        gL.add(Text("moments", font_size=30 if CLEAN else 24).move_to([axL.get_center()[0], HY, 0]))
+        gR.add(Text("step size / lr", font_size=30 if CLEAN else 24).move_to([axR.get_center()[0], HY, 0]))
 
         def curve(ax, col, color, u_max=U, width=4):
             """polyline of column col up to log10(t) = u_max (end point interpolated)"""
@@ -409,8 +437,8 @@ class AdamBiasCorrection(Scene):
         h1 = always_redraw(lambda: Dot(c1.get_end(), radius=0.06, color=BLUE_))
         h2 = always_redraw(lambda: Dot(c2.get_end(), radius=0.06, color=PURPLE_))
         self.add(c1, c2, h1, h2)
-        lab1 = MathTex("m_1", font_size=34, color=BLUE_).move_to(axL.c2p(0.62, 0.86))
-        lab2 = MathTex("m_2", font_size=34, color=PURPLE_).move_to(axL.c2p(2.05, 0.27))
+        lab1 = MathTex("m_1", font_size=34 * z, color=BLUE_).move_to(axL.c2p(0.62, 0.86))
+        lab2 = MathTex("m_2", font_size=34 * z, color=PURPLE_).move_to(axL.c2p(2.05, 0.27))
         self.play(u.animate(rate_func=linear, run_time=1.6).set_value(1.0), FadeIn(lab1, run_time=0.8))
         self.play(u.animate(rate_func=linear, run_time=2.6).set_value(U),
                   Succession(Wait(1.0), FadeIn(lab2, run_time=0.8)))
@@ -420,7 +448,8 @@ class AdamBiasCorrection(Scene):
         p63 = Dot(axL.c2p(3, at(2, 1000)), radius=0.07, color=PURPLE_)
         p63l = MathTex(f"{at(2, 1000):.2f}", font_size=28, color=PURPLE_).next_to(p63, UP + LEFT, buff=0.06)
         cap = swap_caption(self, cap, f"moment2 is only {at(2, 1000):.2f} at t = 1000", color=PURPLE_)
-        self.play(FadeIn(p63, scale=0.5), FadeIn(p63l), run_time=0.5)
+        if not CLEAN:
+            self.play(FadeIn(p63, scale=0.5), FadeIn(p63l), run_time=0.5)
         self.wait(1.2)
 
         # ---- the step size without correction
@@ -429,15 +458,17 @@ class AdamBiasCorrection(Scene):
         v = ValueTracker(0)
         cr = always_redraw(lambda: curve(axR, 5, RED_, v.get_value()))
         hr = always_redraw(lambda: Dot(cr.get_end(), radius=0.06, color=RED_))
-        leg_r = MathTex(r"m_1/\sqrt{m_2}", font_size=32, color=RED_).move_to(axR.c2p(2.75, 6.6))
+        leg_r = MathTex(r"m_1/\sqrt{m_2}", font_size=32 * z, color=RED_).move_to(axR.c2p(2.75, 6.6))
         p1 = Dot(axR.c2p(0, at(5, 1)), radius=0.07, color=RED_)
         p1l = MathTex(f"{at(5, 1):.2f}", font_size=28, color=RED_).next_to(p1, RIGHT, buff=0.12).shift(0.2 * DOWN)
         cap = swap_caption(self, cap, f"step 1:  {at(1, 1):.1f} / √{at(2, 1):.3f} = {at(5, 1):.2f} × lr", color=RED_)
         self.add(cr, hr)
-        self.play(FadeIn(p1, scale=0.5), FadeIn(p1l), FadeIn(leg_r), run_time=0.6)
+        self.play(*([] if CLEAN else [FadeIn(p1, scale=0.5), FadeIn(p1l)]), FadeIn(leg_r), run_time=0.6)
         self.wait(0.6)
         for tt, run, side in [(tpk, 1.3, UP), (100, 1.2, UP + RIGHT), (1000, 1.2, UP + RIGHT)]:
             self.play(v.animate(rate_func=linear).set_value(np.log10(tt)), run_time=run)
+            if CLEAN:  # no values: the curve keeps drawing
+                continue
             p = Dot(axR.c2p(np.log10(tt), at(5, tt)), radius=0.07, color=RED_)
             txt = f"{at(5, tt):.2f}" + (rf"\ \text{{at}}\ t = {tt}" if tt == tpk else "")
             pl = MathTex(txt, font_size=28, color=RED_).next_to(p, side, buff=0.1)
@@ -452,14 +483,14 @@ class AdamBiasCorrection(Scene):
         cap = swap_caption(self, cap, "divide by 1 − βᵗ: both moments become exactly 1")
         flat1 = curve(axL, 3, BLUE_)
         flat2 = DashedVMobject(curve(axL, 4, PURPLE_), num_dashes=40)
-        lab_h = MathTex(r"\hat m_1 = \hat m_2 = 1", font_size=34).move_to(axL.c2p(1.75, 1.12))
+        lab_h = MathTex(r"\hat m_1 = \hat m_2 = 1", font_size=34 * z).move_to(axL.c2p(1.75, 1.12))
         self.play(TransformFromCopy(c1, flat1), TransformFromCopy(c2, flat2),
                   c1.animate.set_stroke(opacity=0.25), c2.animate.set_stroke(opacity=0.25),
-                  lab1.animate.set_opacity(0.35), lab2.animate.set_opacity(0.35), FadeOut(p63), FadeOut(p63l),
-                  FadeIn(lab_h, shift=0.1 * UP), run_time=1.4)
+                  lab1.animate.set_opacity(0.35), lab2.animate.set_opacity(0.35),
+                  *([] if CLEAN else [FadeOut(p63), FadeOut(p63l)]), FadeIn(lab_h, shift=0.1 * UP), run_time=1.4)
         self.wait(0.6)
         cg = curve(axR, 6, GREEN_, width=5)
-        leg_g = MathTex(r"\hat m_1/\sqrt{\hat m_2}", font_size=32, color=GREEN_).next_to(leg_r, DOWN, buff=0.25,
+        leg_g = MathTex(r"\hat m_1/\sqrt{\hat m_2}", font_size=32 * z, color=GREEN_).next_to(leg_r, DOWN, buff=0.25,
                                                                                           aligned_edge=LEFT)
         cap = swap_caption(self, cap, "corrected step: exactly lr from step 1", color=GREEN_)
         self.play(Create(cg), FadeIn(leg_g), run_time=1.3)
@@ -486,6 +517,7 @@ class MatrixBackprop(Scene):
         LAB = {"N": str(N), "D": str(bp["D"]), "C": str(bp["C"]), "1": "1"}
         n_n, n_d, n_c = LAB["N"], LAB["D"], LAB["C"]
         GCOL = PURPLE_
+        clean_frame(self, center=(-1.3, 0.05), height=7.7)    # slide version: no formulas on the right, so centre
         title(self, "Backprop with matrices", f"one linear layer, a minibatch of N = {N} CIFAR-10 images")
 
         def block(rows, cols, name, color, inside=False, fill=0.16, dashed=False):
@@ -526,7 +558,10 @@ class MatrixBackprop(Scene):
             self.add(res)
 
         # ---- forward: S = X Wᵀ + b
-        Y0, TOP, YB = 0.35, 1.15, -1.55
+        if CLEAN:      # three rows: the matrices on top, then dL/dW and dL/dX, so both results stay on screen
+            Y0, TOP, YB, YB2 = 0.3, 2.45, 0.0, -2.5
+        else:
+            Y0, TOP, YB = 0.35, 1.15, -1.55
         S = at(block("N", "C", "S", BLUE_), [-3.2, Y0, 0])
         eq = op("=", [-2.55, Y0, 0])
         X = at(block("N", "D", "X", INK, inside=True), [-0.65, Y0, 0])
@@ -600,26 +635,40 @@ class MatrixBackprop(Scene):
         self.play(Create(check), run_time=0.4)
         res = at(block("C", "D", r"\partial L/\partial W", GCOL, fill=0.3), slot.rect.get_center())
         fill_slot([At.rect, B.rect], slot, res, extra=[FadeOut(qm)])
-        f1 = MathTex(r"\frac{\partial L}{\partial W} = \Big(\frac{\partial L}{\partial S}\Big)^{\!\top} X",
-                     font_size=36, color=GCOL).move_to([5.0, YB, 0])
-        self.play(Write(f1), run_time=0.7)
+        if not CLEAN:
+            f1 = MathTex(r"\frac{\partial L}{\partial W} = \Big(\frac{\partial L}{\partial S}\Big)^{\!\top} X",
+                         font_size=36, color=GCOL).move_to([5.0, YB, 0])
+            self.play(Write(f1), run_time=0.7)
         self.wait(0.6)
 
         # ---- dL/dX = dL/dS · W, by the same rule
         cap = swap_caption(self, cap, f"same rule: ∂L/∂X = (∂L/∂S) W, {n_n} × {n_d}", color=PURPLE_)
-        self.play(FadeOut(VGroup(At, B, check, res, f1)), dotB.animate.move_to([-4.7, YB, 0]), run_time=0.5)
-        A2, B2 = G.copy(), W.copy()
-        slot2 = at(block("N", "D", r"\partial L/\partial X", GCOL, dashed=True), [1.6, YB, 0])
-        self.play(to(A2, [-5.65, YB, 0]), to(B2, [-2.5, YB, 0]), FadeIn(slot2), run_time=0.7)
-        check2 = check.copy().move_to(dotB)
+        if CLEAN:      # its own row below; the dL/dW row stays
+            YX = YB2
+            A2, B2 = G.copy(), W.copy()
+            dotC, eqC = op(r"\cdot", [-4.7, YX, 0]), op("=", [-0.45, YX, 0])
+            slot2 = at(block("N", "D", r"\partial L/\partial X", GCOL, dashed=True), [1.6, YX, 0])
+            self.play(to(A2, [-5.65, YX, 0]), to(B2, [-2.5, YX, 0]), FadeIn(slot2), FadeIn(dotC), FadeIn(eqC),
+                      run_time=0.7)
+            check2 = check.copy().move_to(dotC)
+        else:
+            self.play(FadeOut(VGroup(At, B, check, res, f1)), dotB.animate.move_to([-4.7, YB, 0]), run_time=0.5)
+            A2, B2 = G.copy(), W.copy()
+            slot2 = at(block("N", "D", r"\partial L/\partial X", GCOL, dashed=True), [1.6, YB, 0])
+            self.play(to(A2, [-5.65, YB, 0]), to(B2, [-2.5, YB, 0]), FadeIn(slot2), run_time=0.7)
+            check2 = check.copy().move_to(dotB)
         pop(A2.shape[2], B2.shape[0], color=GREEN_)
         self.play(Create(check2), run_time=0.3)
         res2 = at(block("N", "D", r"\partial L/\partial X", GCOL, fill=0.3), slot2.rect.get_center())
         fill_slot([A2.rect, B2.rect], slot2, res2)
-        f2 = MathTex(r"\frac{\partial L}{\partial X} = \frac{\partial L}{\partial S}\, W", font_size=36,
-                     color=GCOL).move_to([5.0, YB, 0])
-        self.play(Write(f2), run_time=0.6)
+        if not CLEAN:
+            f2 = MathTex(r"\frac{\partial L}{\partial X} = \frac{\partial L}{\partial S}\, W", font_size=36,
+                         color=GCOL).move_to([5.0, YB, 0])
+            self.play(Write(f2), run_time=0.6)
         self.wait(0.5)
+        if CLEAN:      # no autograd check, no Jacobian: hold the two results
+            self.wait(2.5)
+            return
 
         # ---- check against autograd, and the Jacobian that is never formed
         f1.move_to([-2.6, -0.95, 0])

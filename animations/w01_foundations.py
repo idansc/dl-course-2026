@@ -1,5 +1,6 @@
 """Week 1–2 (foundations: perceptron, MLPs, backprop, optimization, initialization). Render one scene:
     manim -qh w01_foundations.py PerceptronLearning
+Slide versions without words (renders/w01/clean/): DLC_CLEAN=1 and a separate --media_dir per parallel run.
 """
 from style import *
 
@@ -186,6 +187,7 @@ class SpaceWarping(Scene):
     Target: p3 slides 22–25."""
 
     def construct(self):
+        clean_frame(self, center=(-2.48, -0.05), height=5.6)   # slide version: no formula panel; zoom onto the plane
         title(self, "A hidden layer warps space", "h = ReLU(Wx + b) with 2 hidden units, applied to XOR")
         rng = np.random.default_rng(4)
         centers = np.array([[1, 1], [-1, -1], [1, -1], [-1, 1]], float)
@@ -259,9 +261,11 @@ class SpaceWarping(Scene):
             MathTex(r"h = \mathrm{ReLU}(z) = \max(z, 0)", font_size=36, color=PURPLE_),
             MathTex(r"\hat y = [\,h_1 + h_2 > 0.5\,]", font_size=36, color=GREEN_),
         ).arrange(DOWN, buff=0.38).move_to([rx, 0.3, 0])
-        self.play(FadeIn(mats[0]))
+        if not CLEAN:
+            self.play(FadeIn(mats[0]))
         cap = swap_caption(self, cap, "1. the linear part Wx + b stretches, squashes and shifts the whole plane")
-        self.play(FadeIn(mats[1]))
+        if not CLEAN:
+            self.play(FadeIn(mats[1]))
         self.play(stage.animate.set_value(1.0), run_time=3.5, rate_func=smooth)
         newl = VGroup(MathTex("z_1", font_size=28, color=MUTED).move_to(axn[0]),
                       MathTex("z_2", font_size=28, color=MUTED).move_to(axn[1]))
@@ -270,7 +274,8 @@ class SpaceWarping(Scene):
         self.wait(1.4)
 
         cap = swap_caption(self, cap, "2. ReLU folds everything negative onto the axes", color=PURPLE_)
-        self.play(FadeIn(mats[2]))
+        if not CLEAN:
+            self.play(FadeIn(mats[2]))
         self.play(stage.animate.set_value(2.0), run_time=3.5, rate_func=smooth)
         newl = VGroup(MathTex("h_1", font_size=28, color=MUTED).move_to(axn[0]),
                       MathTex("h_2", font_size=28, color=MUTED).move_to(axn[1]))
@@ -283,7 +288,7 @@ class SpaceWarping(Scene):
         half = Polygon(to_s((-0.4, 0.9)), to_s((0.9, -0.4)), to_s((1.7, -0.4)), to_s((1.7, 1.55)), to_s((-0.4, 1.55)),
                        stroke_width=0, fill_color=GREEN_, fill_opacity=0.08)
         cap = swap_caption(self, cap, "3. now one straight line separates the classes", color=GREEN_)
-        self.play(FadeIn(mats[3]), Create(sep), FadeIn(half))
+        self.play(*([] if CLEAN else [FadeIn(mats[3])]), Create(sep), FadeIn(half))
         self.wait(1.2)
         cap = swap_caption(self, cap, "a hidden layer learns coordinates in which the problem becomes linear", color=PURPLE_)
         self.wait(2.5)
@@ -308,19 +313,25 @@ class BackpropFlow(Scene):
         g["w0"], g["x0"] = v["x0"] * g["a"], v["w0"] * g["a"]
         g["w1"], g["x1"] = v["x1"] * g["b"], v["w1"] * g["b"]
 
+        clean_frame(self, center=(-0.3, 0.15))     # slide version: no worked formulas; the graph taller and larger
         pos = {"w0": [-5.0, 2.0], "x0": [-5.0, 1.05], "w1": [-5.0, 0.1], "x1": [-5.0, -0.85], "w2": [-5.0, -1.8],
                "m0": [-2.9, 1.5], "m1": [-2.9, -0.4], "s1": [-0.7, 0.55], "s2": [1.5, -0.2], "sg": [3.6, -0.2],
                "out": [5.7, -0.2]}
-        pos = {k: np.array(p + [0]) for k, p in pos.items()}
+        if CLEAN:
+            z = 1.15                              # node and label size
+            pos = {k: np.array([p[0], 1.38 * p[1], 0]) for k, p in pos.items()}
+        else:
+            z = 1
+            pos = {k: np.array(p + [0]) for k, p in pos.items()}
         nodes = {}
         for k in ["w0", "x0", "w1", "x1", "w2"]:
-            nodes[k] = VGroup(RoundedRectangle(corner_radius=0.1, width=0.85, height=0.55, stroke_color=BLUE_,
+            nodes[k] = VGroup(RoundedRectangle(corner_radius=0.1, width=0.85 * z, height=0.55 * z, stroke_color=BLUE_,
                                                fill_color=SOFT, fill_opacity=1, stroke_width=2),
-                              MathTex(f"{k[0]}_{k[1]}", font_size=30, color=BLUE_)).move_to(pos[k])
+                              MathTex(f"{k[0]}_{k[1]}", font_size=30 * z, color=BLUE_)).move_to(pos[k])
         for k, s in [("m0", r"\times"), ("m1", r"\times"), ("s1", "+"), ("s2", "+"), ("sg", r"\sigma")]:
-            nodes[k] = VGroup(Circle(0.36, stroke_color=INK, fill_color=WHITE, fill_opacity=1, stroke_width=3),
-                              MathTex(s, font_size=36)).move_to(pos[k])
-        nodes["out"] = MathTex("f", font_size=40).move_to(pos["out"])
+            nodes[k] = VGroup(Circle(0.36 * z, stroke_color=INK, fill_color=WHITE, fill_opacity=1, stroke_width=3),
+                              MathTex(s, font_size=36 * z)).move_to(pos[k])
+        nodes["out"] = MathTex("f", font_size=40 * z).move_to(pos["out"])
 
         edges = [("w0", "m0", "w0", "w0"), ("x0", "m0", "x0", "x0"), ("w1", "m1", "w1", "w1"), ("x1", "m1", "x1", "x1"),
                  ("m0", "s1", "a", "a"), ("m1", "s1", "b", "b"), ("s1", "s2", "c", "c"), ("w2", "s2", "w2", "w2"),
@@ -334,20 +345,25 @@ class BackpropFlow(Scene):
 
         def lab(k, txt, color, side):
             if k in v:                       # leaves: write the numbers left of the box
-                m = MathTex(txt, font_size=28, color=color)
-                m.next_to(nodes[k], LEFT, buff=0.15).shift((0.17 if side > 0 else -0.17) * UP)
+                m = MathTex(txt, font_size=28 * z, color=color)
+                m.next_to(nodes[k], LEFT, buff=0.15).shift((0.17 if side > 0 else -0.17) * z * UP)
                 return m
             ln = lines[k]
             n = normalize(rotate_vector(ln.get_unit_vector(), PI / 2))
             if n[1] < 0:
                 n = -n
-            m = MathTex(txt, font_size=28, color=color)
-            m.move_to(ln.point_from_proportion(0.5) + (0.28 if side > 0 else -0.28) * n)
+            m = MathTex(txt, font_size=28 * z, color=color)
+            m.move_to(ln.point_from_proportion(0.5) + (0.28 if side > 0 else -0.28) * z * n)
             return m
 
-        key = VGroup(VGroup(Line(ORIGIN, 0.4 * RIGHT, color=GREEN_, stroke_width=4), Text("forward value", font_size=22, color=GREEN_)).arrange(RIGHT, buff=0.12),
-                     VGroup(Line(ORIGIN, 0.4 * RIGHT, color=RED_, stroke_width=4), MathTex(r"\partial f/\partial(\cdot)\ \text{gradient}", font_size=28, color=RED_)).arrange(RIGHT, buff=0.12)
-                     ).arrange(DOWN, aligned_edge=LEFT, buff=0.15).move_to([4.6, 1.9, 0])
+        if CLEAN:                            # legend: plain words, no notation
+            key = VGroup(*[VGroup(Line(ORIGIN, 0.45 * RIGHT, color=c, stroke_width=5), Text(t, font_size=26, color=c))
+                           .arrange(RIGHT, buff=0.15) for t, c in (("forward value", GREEN_), ("gradient", RED_))]
+                         ).arrange(DOWN, aligned_edge=LEFT, buff=0.2).move_to([4.6, 2.75, 0])
+        else:
+            key = VGroup(VGroup(Line(ORIGIN, 0.4 * RIGHT, color=GREEN_, stroke_width=4), Text("forward value", font_size=22, color=GREEN_)).arrange(RIGHT, buff=0.12),
+                         VGroup(Line(ORIGIN, 0.4 * RIGHT, color=RED_, stroke_width=4), MathTex(r"\partial f/\partial(\cdot)\ \text{gradient}", font_size=28, color=RED_)).arrange(RIGHT, buff=0.12)
+                         ).arrange(DOWN, aligned_edge=LEFT, buff=0.15).move_to([4.6, 1.9, 0])
         self.play(*[FadeIn(n) for n in nodes.values()], *[Create(l) for l in lines.values()], FadeIn(key[0]), run_time=1.2)
         cap = caption("a neuron as a graph of simple gates: two ×, two +, one σ")
         self.play(FadeIn(cap))
@@ -370,6 +386,8 @@ class BackpropFlow(Scene):
 
         panel_y = -2.6
         def show_calc(tex, old=None):
+            if CLEAN:                        # slide version: no worked formulas
+                return None
             m = MathTex(tex, font_size=32, color=RED_).move_to([1.0, panel_y, 0])
             if old is None:
                 self.play(FadeIn(m), run_time=0.4)
@@ -410,7 +428,8 @@ class BackpropFlow(Scene):
                          rf"\frac{{\partial f}}{{\partial x_1}} = w_1\cdot{g['b']:.2f} = {g['x1']:.2f}", calc)
         back(["w1", "x1"])
         self.wait(1.2)
-        self.play(FadeOut(calc))
+        if calc is not None:
+            self.play(FadeOut(calc))
         cap = swap_caption(self, cap, "every gate needs only its local derivative: downstream = local × upstream", color=PURPLE_)
         self.wait(2.5)
 

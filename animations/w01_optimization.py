@@ -4,6 +4,9 @@ Every number and path comes from code/optim_real.py (diabetes data, bundled with
 `python code/muon_demo.py` print exactly what the clips show. Code table: code/README.md.
 Render one scene:
     manim -qh --disable_caching -o IllConditioning w01_optimization.py IllConditioning
+Slide versions without words (renders/w01/clean/; separate media dirs, parallel runs collide on the text cache):
+    DLC_CLEAN=1 manim -qh --disable_caching --media_dir media_clean_IllConditioning -o IllConditioning \
+        w01_optimization.py IllConditioning
 Supersedes the synthetic OptimizerPaths (w01_foundations.py) and the third-party GIFs / screen recordings in the p2 deck.
 """
 import sys
@@ -30,6 +33,8 @@ def mtext(markup, size=24, color=INK):
 
 
 def head(scene, text, sub):
+    if CLEAN:                                  # slide version: the slide has its own title
+        return VGroup()
     t = Text(text, font_size=40, weight=BOLD).to_corner(UL, buff=0.45)
     s = mtext(sub, 24, MUTED).next_to(t, DOWN, aligned_edge=LEFT, buff=0.15)
     scene.play(FadeIn(VGroup(t, s), shift=0.2 * DOWN), run_time=0.8)
@@ -37,10 +42,16 @@ def head(scene, text, sub):
 
 
 def cap(markup, color=INK, size=28):
+    if CLEAN:
+        return VMobject()
     return mtext(markup, size, color).to_edge(DOWN, buff=0.45)
 
 
 def swap(scene, old, markup, color=INK, size=28):
+    if CLEAN:                                  # the same pause, no text (none before the first: no blank lead-in)
+        if old is not None:
+            scene.wait(0.6)
+        return VMobject()
     new = cap(markup, color, size)
     if old is None:
         scene.play(FadeIn(new, shift=0.1 * UP), run_time=0.6)
@@ -202,24 +213,36 @@ def star(p, color=INK, r=0.13):
     return Star(5, outer_radius=r, color=color, fill_opacity=1, stroke_width=0).move_to(p)
 
 
+def legend_key(name, color, size=26):
+    """Clean-mode legend entry: a line in the method's colour and its name, no numbers. Every name sits on the same
+    baseline (capitals centred on the line), so entries line up whether or not they have descenders."""
+    line = Line(ORIGIN, 0.4 * RIGHT, color=color, stroke_width=5)
+    name = Text(name, font_size=size, color=color).next_to(line, RIGHT, buff=0.15)
+    cap_h = Text("H", font_size=size).height
+    name.shift((line.get_y() - cap_h / 2 - name[0].get_bottom()[1]) * UP)     # name[0]: a capital or 'm'
+    return VGroup(line, name)
+
+
 class LogPlot:
     """Loss (log10) vs step axes; x ticks every x_step, y labels 10^k at the given exponents."""
 
-    def __init__(self, center, width, height, n_steps, x_step, y_range, y_labels, header=None):
+    def __init__(self, center, width, height, n_steps, x_step, y_range, y_labels, header=None, font_scale=1.0):
+        fs = font_scale
         self.y_range = y_range                         # in log10 units; the axes run from 0 so the x-axis is at the bottom
         self.ax = Axes(x_range=[0, n_steps, x_step], y_range=[0, y_range[1] - y_range[0], 1], x_length=width,
                        y_length=height, tips=False,
                        axis_config={"stroke_color": MUTED, "stroke_width": 2, "include_tip": False},
-                       x_axis_config={"numbers_to_include": list(range(x_step, n_steps + 1, x_step)), "font_size": 20})
+                       x_axis_config={"numbers_to_include": list(range(x_step, n_steps + 1, x_step)),
+                                      "font_size": 20 * fs})
         self.ax.move_to([center[0], center[1], 0])
         for num in self.ax.x_axis.numbers:
             num.set_color(INK)
-        self.ylab = VGroup(*[MathTex(f"10^{{{k}}}", font_size=22).next_to(self.ax.c2p(0, k - y_range[0]), LEFT,
-                                                                          buff=0.12) for k in y_labels])
-        self.xlab = Text("step", font_size=20, color=MUTED).next_to(self.ax.x_axis.get_right(), DOWN, buff=0.32)
+        self.ylab = VGroup(*[MathTex(f"10^{{{k}}}", font_size=22 * fs).next_to(self.ax.c2p(0, k - y_range[0]), LEFT,
+                                                                               buff=0.12) for k in y_labels])
+        self.xlab = Text("step", font_size=20 * fs, color=MUTED).next_to(self.ax.x_axis.get_right(), DOWN, buff=0.32)
         self.group = VGroup(self.ax, self.ylab, self.xlab)
         if header:
-            self.header = mtext(header, 22).next_to(self.ax, UP, buff=0.18)
+            self.header = mtext(header, 22 * fs).next_to(self.ax, UP, buff=0.18)
             self.group.add(self.header)
 
     def pts(self, values):
@@ -248,26 +271,35 @@ class LearningRateRegimes(Scene):
         L = lambda w: Ls + 0.5 * a * (w - ws) ** 2
         xr, yr = (-10.0, 30.0), (1700.0, 6100.0)
         cols = [BLUE_, GREEN_, ORANGE_, RED_]
-        xs = [-5.1, -1.7, 1.7, 5.1]
+        if CLEAN:          # slide version: no lr values or factors; taller panels under one-line panel titles
+            xs, cy, pw, ph = [-5.25, -1.75, 1.75, 5.25], -0.15, 3.15, 5.2
+        else:
+            xs, cy, pw, ph = [-5.1, -1.7, 1.7, 5.1], -0.05, 3.0, 2.75
         wins, curves, bases, ticks, headers, traces, factors = [], VGroup(), VGroup(), VGroup(), [], [], []
         for k, run in enumerate(r["runs"]):
-            win = Window(xr, yr, center=(xs[k], -0.05), width=3.0, height=2.75)
+            win = Window(xr, yr, center=(xs[k], cy), width=pw, height=ph)
             wins.append(win)
             curves.add(ParametricFunction(lambda u, win=win: win(u, L(u)), t_range=[xr[0], xr[1]], color=MUTED,
-                                          stroke_width=3))
+                                          stroke_width=3.5 if CLEAN else 3))
             bases.add(Line(win(xr[0], yr[0]), win(xr[1], yr[0]), color=MUTED, stroke_width=1.5))
             for wv, lab in ((0.0, "0"), (ws, "w*")):
                 ticks.add(Line(win(wv, yr[0]), win(wv, yr[0]) + 0.08 * DOWN, color=MUTED, stroke_width=1.5),
-                          Text(lab, font_size=18, color=MUTED).next_to(win(wv, yr[0]), DOWN, buff=0.12))
+                          Text(lab, font_size=24 if CLEAN else 18, color=MUTED).next_to(win(wv, yr[0]), DOWN,
+                                                                                        buff=0.12))
             col = cols[k]
-            h1 = Text(f"lr = {run['factor']:g} / a", font_size=28, color=col, weight=BOLD)
-            h2 = Text(f"= {run['lr']:.4f}", font_size=24, color=col)
-            headers.append(VGroup(h1, h2).arrange(DOWN, buff=0.1).next_to(win(sum(xr) / 2, yr[1]), UP, buff=0.12))
-            traces.append(Trace([win(w, l) for w, l in zip(run["path"], run["loss"])], col, width=2.2, dot_r=0.035,
-                                head_r=0.07))
-            factors.append(Text(f"×{run['contraction']:.2f} per step".replace("-", "−"), font_size=22, color=col)
-                           .next_to(win(sum(xr) / 2, yr[0]), DOWN, buff=0.55))
-        starts = VGroup(*[Dot(win(r["w0"], L(r["w0"])), radius=0.07, color=INK) for win in wins])
+            h1 = Text(f"lr = {run['factor']:g} / a", font_size=34 if CLEAN else 28, color=col, weight=BOLD)
+            if CLEAN:
+                headers.append(h1.next_to(win(sum(xr) / 2, yr[1]), UP, buff=0.2))
+            else:
+                h2 = Text(f"= {run['lr']:.4f}", font_size=24, color=col)
+                headers.append(VGroup(h1, h2).arrange(DOWN, buff=0.1).next_to(win(sum(xr) / 2, yr[1]), UP, buff=0.12))
+            traces.append(Trace([win(w, l) for w, l in zip(run["path"], run["loss"])], col,
+                                width=2.6 if CLEAN else 2.2, dot_r=0.042 if CLEAN else 0.035,
+                                head_r=0.085 if CLEAN else 0.07))
+            if not CLEAN:
+                factors.append(Text(f"×{run['contraction']:.2f} per step".replace("-", "−"), font_size=22, color=col)
+                               .next_to(win(sum(xr) / 2, yr[0]), DOWN, buff=0.55))
+        starts = VGroup(*[Dot(win(r["w0"], L(r["w0"])), radius=0.085 if CLEAN else 0.07, color=INK) for win in wins])
 
         c = swap(self, None, f"L(w) is a parabola: curvature a = mean(bmi²) = {a:.1f}")
         self.play(Create(curves), FadeIn(bases), FadeIn(ticks), run_time=1.4)
@@ -285,7 +317,8 @@ class LearningRateRegimes(Scene):
             traces[k].freeze()
             self.wait(0.5)
         c = swap(self, c, "each step multiplies the distance to w* by 1 − lr·a")
-        self.play(LaggedStart(*[FadeIn(f, shift=0.1 * UP) for f in factors], lag_ratio=0.25), run_time=1.4)
+        if factors:
+            self.play(LaggedStart(*[FadeIn(f, shift=0.1 * UP) for f in factors], lag_ratio=0.25), run_time=1.4)
         self.wait(1.6)
         c = swap(self, c, f"it converges only if lr &lt; 2/a = {r['threshold']:.4f}")
         self.wait(2.8)
@@ -303,8 +336,14 @@ class IllConditioning(Scene):
         head(self, "Problem #1: ill-conditioning",
              "diabetes data, 442 patients · s = w<sub>1</sub>·bmi + w<sub>2</sub>·s5 (centred) · "
              "L(w) = ½·mean((s − y)²)")
-        winR = Window((-4, 70), (-3, 23), center=(-2.45, 0.0), width=8.2)
-        winS = Window((-8, 52), (-8, 52), center=(4.85, 0.0), width=3.3)
+        if CLEAN:      # slide version: the raw bowl alone first, large; it moves left when the standardized one comes in
+            winR = Window((-4, 70), (-3, 23), center=(0.3, 0.1), width=12.8)
+            winR2 = Window((-4, 70), (-3, 23), center=(-2.25, 0.0), width=8.3)      # where the raw panel ends up
+            winS = Window((-8, 52), (-8, 52), center=(4.95, 0.0), width=3.8)
+        else:
+            winR = Window((-4, 70), (-3, 23), center=(-2.45, 0.0), width=8.2)
+            winS = Window((-8, 52), (-8, 52), center=(4.85, 0.0), width=3.3)
+        lab_fs = 24 if CLEAN else 20
         parts = {}
         for key, d, win in (("raw", R, winR), ("std", S, winS)):
             gap0 = d["gap"][0]
@@ -314,37 +353,56 @@ class IllConditioning(Scene):
             p["target"] = bowl_contours(win, d["H"], d["w_star"], [r["target"] * gap0], color=GREEN_, width=3)
             p["star"] = star(win.w(d["w_star"]))
             p["start"] = Dot(win.w([0, 0]), radius=0.07, color=INK)
-            p["hlab"] = mtext("w<sub>2</sub> (s5)", 20, MUTED).next_to(p["frame"], DOWN, buff=0.1).align_to(p["frame"], RIGHT)
-            p["vlab"] = mtext("w<sub>1</sub> (bmi)", 20, MUTED).rotate(PI / 2).next_to(p["frame"], LEFT, buff=0.1) \
+            p["hlab"] = mtext("w<sub>2</sub> (s5)", lab_fs, MUTED).next_to(p["frame"], DOWN, buff=0.1) \
+                .align_to(p["frame"], RIGHT)
+            p["vlab"] = mtext("w<sub>1</sub> (bmi)", lab_fs, MUTED).rotate(PI / 2).next_to(p["frame"], LEFT, buff=0.1) \
                 .align_to(p["frame"], UP)
             path = d["path"][: d["steps"] + 1]
-            p["trace"] = Trace([win.w(q) for q in path], BLUE_, width=2.2, dot_r=0.03, head_r=0.075)
+            p["trace"] = Trace([win.w(q) for q in path], BLUE_, width=2.6 if CLEAN else 2.2,
+                               dot_r=0.035 if CLEAN else 0.03, head_r=0.085 if CLEAN else 0.075)
             parts[key] = p
-        hdrR = mtext(f"raw features:  κ = {R['kappa']:.1f}", 24).next_to(winR.frame(), UP, buff=0.15) \
-            .align_to(winR.frame(), LEFT)
-        hdrS = mtext(f"standardized:  κ = {S['kappa']:.1f}", 24).next_to(winS.frame(), UP, buff=0.15) \
-            .align_to(winS.frame(), LEFT)
-        tlab = mtext("1% of the loss gap", 18, GREEN_).next_to(winR.w(R["w_star"]), DOWN, buff=0.55)
+        if CLEAN:      # panel labels only: no κ, no step counts
+            hdrR = mtext("raw", 30).next_to(winR.frame(), UP, buff=0.15).align_to(winR.frame(), LEFT)
+            hdrS = mtext("standardized", 30).next_to(winS.frame(), UP, buff=0.15).align_to(winS.frame(), LEFT)
+        else:
+            hdrR = mtext(f"raw features:  κ = {R['kappa']:.1f}", 24).next_to(winR.frame(), UP, buff=0.15) \
+                .align_to(winR.frame(), LEFT)
+            hdrS = mtext(f"standardized:  κ = {S['kappa']:.1f}", 24).next_to(winS.frame(), UP, buff=0.15) \
+                .align_to(winS.frame(), LEFT)
+            tlab = mtext("1% of the loss gap", 18, GREEN_).next_to(winR.w(R["w_star"]), DOWN, buff=0.55)
 
         P = parts["raw"]
         c = swap(self, None, f"curvature {R['eig'][1]:.1f} across the valley, {R['eig'][0]:.2f} along it")
         self.play(FadeIn(P["frame"]), Create(P["contours"]), FadeIn(hdrR), FadeIn(P["hlab"]), FadeIn(P["vlab"]),
                   run_time=1.6)
-        self.play(FadeIn(P["start"]), FadeIn(P["star"]), Create(P["target"]), FadeIn(tlab), run_time=0.8)
+        self.play(FadeIn(P["start"]), FadeIn(P["star"]), Create(P["target"]), *([] if CLEAN else [FadeIn(tlab)]),
+                  run_time=0.8)
         self.wait(1.0)
         c = swap(self, c, f"GD, best fixed lr ({R['lr']:.3f}): zigzags across, crawls along")
-        cnt = step_counter(P["trace"].t, winR.frame().get_corner(UR) + np.array([-1.25, 0.27, 0]), BLUE_)
-        self.add(P["trace"], cnt)
+        if CLEAN:
+            self.add(P["trace"])
+        else:
+            cnt = step_counter(P["trace"].t, winR.frame().get_corner(UR) + np.array([-1.25, 0.27, 0]), BLUE_)
+            self.add(P["trace"], cnt)
         run_steps(self, [P["trace"]], [10, R["steps"]], [3.6, 4.2])
         P["trace"].freeze()
-        cnt.clear_updaters()
-        resR = mtext(f"<b>{R['steps']} steps</b> to 1% of the gap", 24, BLUE_).next_to(P["frame"], DOWN, buff=0.45) \
-            .align_to(P["frame"], LEFT)
-        self.play(FadeIn(resR, shift=0.1 * UP), run_time=0.5)
+        if not CLEAN:
+            cnt.clear_updaters()
+            resR = mtext(f"<b>{R['steps']} steps</b> to 1% of the gap", 24, BLUE_) \
+                .next_to(P["frame"], DOWN, buff=0.45).align_to(P["frame"], LEFT)
+            self.play(FadeIn(resR, shift=0.1 * UP), run_time=0.5)
         self.wait(0.8)
 
         Q = parts["std"]
-        c = swap(self, c, f"standardize each feature: curvatures {S['eig'][1]:.2f} and {S['eig'][0]:.2f}")
+        if CLEAN:      # instead of the caption: the raw panel shrinks to the left to make room
+            f2, c0 = winR2.frame(), P["frame"].get_center()
+            self.play(VGroup(P["frame"], P["contours"], P["target"], P["star"], P["start"], P["trace"]).animate
+                      .scale(winR2.width / winR.width, about_point=c0).shift(f2.get_center() - c0),
+                      hdrR.animate.next_to(f2, UP, buff=0.15).align_to(f2, LEFT),
+                      P["hlab"].animate.next_to(f2, DOWN, buff=0.1).align_to(f2, RIGHT),
+                      P["vlab"].animate.next_to(f2, LEFT, buff=0.1).align_to(f2, UP), run_time=1.0)
+        else:
+            c = swap(self, c, f"standardize each feature: curvatures {S['eig'][1]:.2f} and {S['eig'][0]:.2f}")
         self.play(FadeIn(Q["frame"]), Create(Q["contours"]), FadeIn(hdrS), FadeIn(Q["hlab"]), FadeIn(Q["vlab"]),
                   run_time=1.6)
         self.play(FadeIn(Q["start"]), FadeIn(Q["star"]), Create(Q["target"]), run_time=0.8)
@@ -353,9 +411,10 @@ class IllConditioning(Scene):
         self.add(Q["trace"])
         run_steps(self, [Q["trace"]], [1, 2, 3], [0.9, 0.9, 0.9])
         Q["trace"].freeze()
-        resS = mtext(f"<b>{S['steps']} steps</b>", 24, BLUE_).next_to(Q["frame"], DOWN, buff=0.45) \
-            .align_to(Q["frame"], LEFT)
-        self.play(FadeIn(resS, shift=0.1 * UP), run_time=0.5)
+        if not CLEAN:
+            resS = mtext(f"<b>{S['steps']} steps</b>", 24, BLUE_).next_to(Q["frame"], DOWN, buff=0.45) \
+                .align_to(Q["frame"], LEFT)
+            self.play(FadeIn(resS, shift=0.1 * UP), run_time=0.5)
         self.wait(1.0)
         c = swap(self, c, f"κ = largest / smallest curvature: {R['kappa']:.1f} → {S['kappa']:.1f}")
         self.wait(2.8)
@@ -371,32 +430,46 @@ class NoisyGradients(Scene):
         r = opt.noisy_gradients()
         head(self, "Problem #3: noisy gradients",
              f"diabetes data, 442 patients · standardized bmi and s5 · minibatch SGD, lr = {r['lr']}")
-        win = Window((-6, 44), (-6, 58), center=(-3.3, -0.35), height=4.6)
+        if CLEAN:      # slide version: bigger panels, a legend with the batch sizes only
+            win = Window((-6, 44), (-6, 58), center=(-3.45, 0.1), height=6.9)
+        else:
+            win = Window((-6, 44), (-6, 58), center=(-3.3, -0.35), height=4.6)
         frame = win.frame()
         gap0 = r["runs"][0]["gap"][0]
         contours = bowl_contours(win, r["H"], r["w_star"], gap0 * GAPS)
         st = star(win.w(r["w_star"]))
         start = Dot(win.w([0, 0]), radius=0.07, color=INK)
-        hlab = mtext("w<sub>2</sub> (s5)", 20, MUTED).next_to(frame, DOWN, buff=0.1).align_to(frame, RIGHT)
-        vlab = mtext("w<sub>1</sub> (bmi)", 20, MUTED).rotate(PI / 2).next_to(frame, LEFT, buff=0.1).align_to(frame, UP)
-        lp = LogPlot(center=(3.85, 0.4), width=5.0, height=2.6, n_steps=r["num_steps"], x_step=50, y_range=(-4, 4),
-                     y_labels=[-4, -2, 0, 2, 4], header="L − L* on all 442 patients")
+        lab_fs = 24 if CLEAN else 20
+        hlab = mtext("w<sub>2</sub> (s5)", lab_fs, MUTED).next_to(frame, DOWN, buff=0.1).align_to(frame, RIGHT)
+        vlab = mtext("w<sub>1</sub> (bmi)", lab_fs, MUTED).rotate(PI / 2).next_to(frame, LEFT, buff=0.1) \
+            .align_to(frame, UP)
+        if CLEAN:
+            lp = LogPlot(center=(3.75, 0.8), width=5.6, height=4.0, n_steps=r["num_steps"], x_step=50,
+                         y_range=(-4, 4), y_labels=[-4, -2, 0, 2, 4], header="L − L*", font_scale=1.2)
+        else:
+            lp = LogPlot(center=(3.85, 0.4), width=5.0, height=2.6, n_steps=r["num_steps"], x_step=50,
+                         y_range=(-4, 4), y_labels=[-4, -2, 0, 2, 4], header="L − L* on all 442 patients")
         cols = {442: INK, 16: PURPLE_, 1: ORANGE_}
         texts = {442: "B = 442, the full batch: the exact gradient",
                  16: "B = 16: a noisy estimate, the path wobbles",
                  1: "B = 1: one patient per step, a random walk"}
-        legend_hdr = Text("mean L − L*, last 50 steps", font_size=19, color=MUTED)
-        legend_hdr.move_to([lp.ax.get_left()[0], -1.55, 0], aligned_edge=LEFT)
-        rows = []
-        for i, run in enumerate(r["runs"]):
-            B = run["batch_size"]
-            val = f"{run['gap_last50']:.3f}" if run["gap_last50"] < 0.1 else f"{run['gap_last50']:.1f}"
-            y = -1.92 - 0.36 * i
-            key = VGroup(Line(ORIGIN, 0.35 * RIGHT, color=cols[B], stroke_width=5),
-                         Text(f"B = {B}", font_size=21, color=cols[B])).arrange(RIGHT, buff=0.15)
-            key.move_to([lp.ax.get_left()[0], y, 0], aligned_edge=LEFT)
-            num = Text(val, font_size=21, color=cols[B]).move_to([lp.ax.get_left()[0] + 3.4, y, 0], aligned_edge=RIGHT)
-            rows.append(VGroup(key, num))
+        if CLEAN:
+            keys = VGroup(*[legend_key(f"B = {run['batch_size']}", cols[run["batch_size"]]) for run in r["runs"]]) \
+                .arrange(RIGHT, buff=0.55).move_to([lp.ax.get_center()[0], -2.55, 0])
+        else:
+            legend_hdr = Text("mean L − L*, last 50 steps", font_size=19, color=MUTED)
+            legend_hdr.move_to([lp.ax.get_left()[0], -1.55, 0], aligned_edge=LEFT)
+            rows = []
+            for i, run in enumerate(r["runs"]):
+                B = run["batch_size"]
+                val = f"{run['gap_last50']:.3f}" if run["gap_last50"] < 0.1 else f"{run['gap_last50']:.1f}"
+                y = -1.92 - 0.36 * i
+                key = VGroup(Line(ORIGIN, 0.35 * RIGHT, color=cols[B], stroke_width=5),
+                             Text(f"B = {B}", font_size=21, color=cols[B])).arrange(RIGHT, buff=0.15)
+                key.move_to([lp.ax.get_left()[0], y, 0], aligned_edge=LEFT)
+                num = Text(val, font_size=21, color=cols[B]).move_to([lp.ax.get_left()[0] + 3.4, y, 0],
+                                                                      aligned_edge=RIGHT)
+                rows.append(VGroup(key, num))
 
         c = swap(self, None, "each step: the gradient of B random patients")
         self.play(FadeIn(frame), Create(contours), FadeIn(hlab), FadeIn(vlab), run_time=1.4)
@@ -405,13 +478,18 @@ class NoisyGradients(Scene):
         self.wait(0.6)
         for i, run in enumerate(r["runs"]):
             B = run["batch_size"]
-            c = swap(self, c, texts[B], color=cols[B] if B != 442 else INK)
-            tr = Trace([win.w(q) for q in run["path"]], cols[B], width=2.0 if B != 442 else 3.0, head_r=0.07)
-            lt = Trace(lp.pts(run["gap"]), cols[B], width=2.0, head_r=0.04)
+            if CLEAN:  # instead of the caption: the batch size joins the legend
+                self.play(FadeIn(keys[i]), run_time=0.6)
+            else:
+                c = swap(self, c, texts[B], color=cols[B] if B != 442 else INK)
+            tr = Trace([win.w(q) for q in run["path"]], cols[B], width=(2.0 if B != 442 else 3.0) + (0.4 if CLEAN else 0),
+                       head_r=0.085 if CLEAN else 0.07)
+            lt = Trace(lp.pts(run["gap"]), cols[B], width=2.4 if CLEAN else 2.0, head_r=0.05 if CLEAN else 0.04)
             self.add(tr, lt)
             run_steps(self, [tr, lt], [r["num_steps"]], [4.6])
             tr.freeze(), lt.freeze()
-            self.play(FadeIn(rows[i]) if i else AnimationGroup(FadeIn(legend_hdr), FadeIn(rows[i])), run_time=0.5)
+            if not CLEAN:
+                self.play(FadeIn(rows[i]) if i else AnimationGroup(FadeIn(legend_hdr), FadeIn(rows[i])), run_time=0.5)
         c = swap(self, c, "smaller batch: noisier steps, higher loss floor")
         self.wait(2.8)
 
@@ -428,7 +506,10 @@ class SaddlePoint(Scene):
         head(self, "Problem #2: saddle points",
              "one hidden unit: s = w<sub>2</sub>·tanh(w<sub>1</sub>·x) · x = bmi, y = progression (standardized), "
              "442 patients")
-        win = Window((-1.6, 1.6), (-4.4, 4.4), center=(-3.75, -0.25), width=4.6, height=4.9)
+        if CLEAN:      # slide version: bigger panels; no minimum labels, loss values or step marks; a legend
+            win = Window((-1.6, 1.6), (-4.4, 4.4), center=(-3.3, 0.05), width=6.0, height=6.6)
+        else:
+            win = Window((-1.6, 1.6), (-4.4, 4.4), center=(-3.75, -0.25), width=4.6, height=4.9)
         frame = win.frame()
         levels = [0.3285, 0.331, 0.336, 0.345, 0.36, 0.38, 0.41, 0.45, 0.49, 0.51, 0.56, 0.65, 0.8, 1.05, 1.5, 2.2, 3.3,
                   5.0]
@@ -440,77 +521,138 @@ class SaddlePoint(Scene):
         sad = VGroup(Line(UL, DR), Line(UR, DL)).scale(0.11).set_stroke(RED_, 5).move_to(win(0, 0))
         wm = r["w_min"]
         mins = VGroup(star(win(wm[0], wm[1]), GREEN_, 0.15), star(win(-wm[0], -wm[1]), GREEN_, 0.15))
-        minlab = Text("minimum", font_size=20, color=GREEN_).next_to(mins[0], RIGHT, buff=0.12)
-        minlab2 = Text("minimum", font_size=20, color=GREEN_).next_to(mins[1], LEFT, buff=0.12)
-        for m in (minlab, minlab2):
-            m.add_background_rectangle(color=WHITE, opacity=0.9, buff=0.05)
-        hlab = mtext("w<sub>1</sub>", 22, MUTED).next_to(frame, DOWN, buff=0.1).align_to(frame, RIGHT)
-        vlab = mtext("w<sub>2</sub>", 22, MUTED).next_to(frame, LEFT, buff=0.1).align_to(frame, UP)
+        if not CLEAN:
+            minlab = Text("minimum", font_size=20, color=GREEN_).next_to(mins[0], RIGHT, buff=0.12)
+            minlab2 = Text("minimum", font_size=20, color=GREEN_).next_to(mins[1], LEFT, buff=0.12)
+            for m in (minlab, minlab2):
+                m.add_background_rectangle(color=WHITE, opacity=0.9, buff=0.05)
+        hlab = mtext("w<sub>1</sub>", 26 if CLEAN else 22, MUTED).next_to(frame, DOWN, buff=0.1).align_to(frame, RIGHT)
+        vlab = mtext("w<sub>2</sub>", 26 if CLEAN else 22, MUTED).next_to(frame, LEFT, buff=0.1).align_to(frame, UP)
 
         # loss vs step
         n = len(r["runs"]["GD"]["loss"]) - 1
-        ax = Axes(x_range=[0, n, 20], y_range=[0.30, 0.52, 0.05], x_length=5.2, y_length=3.0, tips=False,
+        fs = 24 if CLEAN else 20
+        ax = Axes(x_range=[0, n, 20], y_range=[0.30, 0.52, 0.05], x_length=5.4 if CLEAN else 5.2,
+                  y_length=4.2 if CLEAN else 3.0, tips=False,
                   axis_config={"stroke_color": MUTED, "stroke_width": 2, "include_tip": False},
-                  x_axis_config={"numbers_to_include": list(range(20, n + 1, 20)), "font_size": 20},
-                  y_axis_config={"numbers_to_include": [0.35, 0.4, 0.45, 0.5], "font_size": 20,
-                                 "decimal_number_config": {"num_decimal_places": 2}}).move_to([3.55, 0.3, 0])
+                  x_axis_config={"numbers_to_include": list(range(20, n + 1, 20)), "font_size": fs},
+                  y_axis_config={"numbers_to_include": [0.35, 0.4, 0.45, 0.5], "font_size": fs,
+                                 "decimal_number_config": {"num_decimal_places": 2}}) \
+            .move_to([3.6, 0.45, 0] if CLEAN else [3.55, 0.3, 0])
         for num in [*ax.x_axis.numbers, *ax.y_axis.numbers]:
             num.set_color(INK)
-        ahdr = Text("loss", font_size=22).next_to(ax, UP, buff=0.15)
-        axl = Text("step", font_size=20, color=MUTED).next_to(ax.x_axis.get_right(), DOWN, buff=0.32)
+        ahdr = Text("loss", font_size=26 if CLEAN else 22).next_to(ax, UP, buff=0.15)
+        axl = Text("step", font_size=fs, color=MUTED).next_to(ax.x_axis.get_right(), DOWN, buff=0.32)
         half = 0.5 * (r["L0"] + r["L_min"])
         lines = VGroup(DashedLine(ax.c2p(0, r["L0"]), ax.c2p(n, r["L0"]), color=RED_, stroke_width=1.5),
                        DashedLine(ax.c2p(0, r["L_min"]), ax.c2p(n, r["L_min"]), color=GREEN_, stroke_width=1.5))
-        llab = VGroup(Text(f"saddle {r['L0']:.3f}", font_size=17, color=RED_).next_to(ax.c2p(n, r["L0"]), UP, buff=0.06)
+        sl, ml = ("saddle", "minimum") if CLEAN else (f"saddle {r['L0']:.3f}", f"minimum {r['L_min']:.3f}")
+        llab = VGroup(Text(sl, font_size=22 if CLEAN else 17, color=RED_).next_to(ax.c2p(n, r["L0"]), UP, buff=0.06)
                       .align_to(ax.c2p(n, 0), RIGHT),
-                      Text(f"minimum {r['L_min']:.3f}", font_size=17, color=GREEN_)
+                      Text(ml, font_size=22 if CLEAN else 17, color=GREEN_)
                       .next_to(ax.c2p(n, r["L_min"]), DOWN, buff=0.06).align_to(ax.c2p(n, 0), RIGHT))
 
         cols = {"GD": INK, "momentum": BLUE_}
         tr, lt, marks = {}, {}, {}
         for name, run in r["runs"].items():
-            tr[name] = Trace([win(*q) for q in run["path"]], cols[name], width=2.6, dot_r=0.022, head_r=0.075)
-            lt[name] = Trace([ax.c2p(i, v) for i, v in enumerate(run["loss"])], cols[name], width=2.6, head_r=0.05)
-            e = run["escape"]
-            dot = Dot(ax.c2p(e, half), radius=0.06, color=cols[name])
-            lab = Text(f"step {e}", font_size=20, color=cols[name]).next_to(dot, RIGHT, buff=0.12)
-            marks[name] = VGroup(dot, lab)
+            tr[name] = Trace([win(*q) for q in run["path"]], cols[name], width=3.0 if CLEAN else 2.6,
+                             dot_r=0.026 if CLEAN else 0.022, head_r=0.085 if CLEAN else 0.075)
+            lt[name] = Trace([ax.c2p(i, v) for i, v in enumerate(run["loss"])], cols[name], width=3.0 if CLEAN else 2.6,
+                             head_r=0.06 if CLEAN else 0.05)
+            if not CLEAN:
+                e = run["escape"]
+                dot = Dot(ax.c2p(e, half), radius=0.06, color=cols[name])
+                lab = Text(f"step {e}", font_size=20, color=cols[name]).next_to(dot, RIGHT, buff=0.12)
+                marks[name] = VGroup(dot, lab)
+        if CLEAN:
+            keys = VGroup(*[legend_key(name, cols[name]) for name in r["runs"]]).arrange(RIGHT, buff=0.6) \
+                .move_to([ax.get_center()[0], -2.6, 0])
 
         c = swap(self, None, "the real loss surface: a saddle and two minima")
         self.play(FadeIn(frame), Create(contours), FadeIn(hlab), FadeIn(vlab), run_time=2.0)
-        self.play(FadeIn(mins), FadeIn(minlab), FadeIn(minlab2), run_time=0.6)
+        self.play(FadeIn(mins), *([] if CLEAN else [FadeIn(minlab), FadeIn(minlab2)]), run_time=0.6)
         self.wait(0.6)
         c = swap(self, c, f"at w = 0: gradient 0, curvatures +{r['mean_xy']:.2f} and −{r['mean_xy']:.2f}")
         self.play(Create(axes0), FadeIn(sad, scale=1.5), run_time=1.0)
         self.wait(1.4)
         c = swap(self, c, f"GD from ({r['start'][0]}, {r['start'][1]}), lr {r['lr']}: it stalls on the plateau")
-        self.play(Create(ax), FadeIn(ahdr), FadeIn(axl), FadeIn(lines), FadeIn(llab), run_time=0.8)
+        self.play(Create(ax), FadeIn(ahdr), FadeIn(axl), FadeIn(lines), FadeIn(llab),
+                  *([FadeIn(keys[0])] if CLEAN else []), run_time=0.8)
         self.add(tr["GD"], lt["GD"])
         run_steps(self, [tr["GD"], lt["GD"]], [n], [6.0])
         tr["GD"].freeze(), lt["GD"].freeze()
-        self.play(FadeIn(marks["GD"]), run_time=0.4)
-        c = swap(self, c, f"momentum, ρ = {r['rho']}: speed builds up, it escapes", color=BLUE_)
+        if CLEAN:      # instead of the step mark and the caption: momentum joins the legend
+            self.play(FadeIn(keys[1]), run_time=0.6)
+        else:
+            self.play(FadeIn(marks["GD"]), run_time=0.4)
+            c = swap(self, c, f"momentum, ρ = {r['rho']}: speed builds up, it escapes", color=BLUE_)
         self.add(tr["momentum"], lt["momentum"])
         run_steps(self, [tr["momentum"], lt["momentum"]], [n], [6.0])
         tr["momentum"].freeze(), lt["momentum"].freeze()
-        self.play(FadeIn(marks["momentum"]), run_time=0.4)
+        if not CLEAN:
+            self.play(FadeIn(marks["momentum"]), run_time=0.4)
         c = swap(self, c, f"halfway down the loss: step {r['runs']['GD']['escape']} vs step "
                           f"{r['runs']['momentum']['escape']}")
         self.wait(2.8)
 
 
 # =====================================================================================================
-def bowl_panel(r, center=(-2.6, 0.35), width=8.0):
+def bowl_panel(r, center=(-2.6, 0.35), width=8.0, label_size=20):
     win = Window(opt.RAW_WINDOW["w2"], opt.RAW_WINDOW["w1"], center=center, width=width)
     frame = win.frame()
     gap0 = r["runs"][0]["gap"][0]
     grp = dict(win=win, frame=frame,
                contours=bowl_contours(win, r["H"], r["w_star"], gap0 * GAPS),
                star=star(win.w(r["w_star"])), start=Dot(win.w([0, 0]), radius=0.07, color=INK),
-               hlab=mtext("w<sub>2</sub> (s5)", 20, MUTED).next_to(frame, DOWN, buff=0.1).align_to(frame, RIGHT),
-               vlab=mtext("w<sub>1</sub> (bmi)", 20, MUTED).rotate(PI / 2).next_to(frame, LEFT, buff=0.1)
+               hlab=mtext("w<sub>2</sub> (s5)", label_size, MUTED).next_to(frame, DOWN, buff=0.1).align_to(frame, RIGHT),
+               vlab=mtext("w<sub>1</sub> (bmi)", label_size, MUTED).rotate(PI / 2).next_to(frame, LEFT, buff=0.1)
                .align_to(frame, UP))
     return grp
+
+
+def valley_layout(r, n):
+    """Bowl panel and loss plot of MomentumNesterov / AdaptiveMethods. Clean mode: the bowl across the full width,
+    the loss plot below it (the legend goes to its left)."""
+    if CLEAN:
+        lp = LogPlot(center=(2.5, -2.2), width=7.0, height=2.2, n_steps=n, x_step=50, y_range=(-6, 4),
+                     y_labels=[-6, -3, 0, 3], header="L − L*", font_scale=1.2)
+        lp.xlab.next_to(lp.ax.x_axis.get_right(), RIGHT, buff=0.2)          # beside the axis: no room below
+        return bowl_panel(r, center=(0.35, 1.75), width=12.0, label_size=24), lp
+    return (bowl_panel(r), LogPlot(center=(4.6, 0.35), width=3.9, height=2.6, n_steps=n, x_step=50, y_range=(-6, 4),
+                                   y_labels=[-6, -3, 0, 3], header="L − L*"))
+
+
+def valley_keys(B, runs):
+    """Clean-mode legend: method names only, one per row, left of the loss plot."""
+    keys = [legend_key(run["name"], OPT_COLOR[run["name"]]) for run in runs]
+    for i, k in enumerate(keys):         # placed by the coloured line, so the rows are evenly spaced
+        k.shift(np.array([B["frame"].get_left()[0], -1.6 - 0.48 * i, 0]) - k[0].get_left())
+    return keys
+
+
+def valley_runs(scene, c, B, lp, runs, n, texts, rows, legend_hdr, run_time):
+    """Each optimizer in turn: its path on the bowl and its loss curve; the earlier paths fade. Clean mode: the
+    method's name joins the legend instead of the caption, and no numbers are shown."""
+    keys = valley_keys(B, runs) if CLEAN else None
+    prev = []
+    for i, run in enumerate(runs):
+        col = OPT_COLOR[run["name"]]
+        if CLEAN:
+            scene.play(FadeIn(keys[i]), run_time=0.6)
+        else:
+            c = swap(scene, c, texts[run["name"]], color=col)
+        tr = Trace([B["win"].w(q) for q in run["path"]], col, width=3.0 if CLEAN else 2.4,
+                   dot_r=0.03 if CLEAN else 0.025, head_r=0.085 if CLEAN else 0.07)
+        lt = Trace(lp.pts(run["gap"]), col, width=2.4 if CLEAN else 2.0, head_r=0.05 if CLEAN else 0.04)
+        scene.add(tr, lt)
+        run_steps(scene, [tr, lt], [n], [run_time])
+        tr.freeze(), lt.freeze()
+        anims = [] if CLEAN else [FadeIn(rows[i])] + ([FadeIn(legend_hdr)] if i == 0 else [])
+        anims += [p.animate.set_opacity(0.3) for p in prev]
+        if anims:
+            scene.play(*anims, run_time=0.5)
+        prev.append(VGroup(tr.line, tr.dots, tr.head))
+    return c
 
 
 class MomentumNesterov(Scene):
@@ -518,50 +660,49 @@ class MomentumNesterov(Scene):
     SGD+Momentum (rho 0.9) speeds along the valley but keeps swinging across (22 steps), Nesterov damps the swing
     (18 steps). Numbers: optim_real.momentum_nesterov(). Target: p2 "Solves the previous problems" and the Nesterov
     slides (replaces the gbhat.com GIFs and screen recordings)."""
+    TITLE = "Momentum and Nesterov"
+    METHODS = None                                   # None: all three runs (MomentumValley keeps two)
 
     def construct(self):
         r = opt.momentum_nesterov()
-        head(self, "Momentum and Nesterov",
+        runs = [run for run in r["runs"] if self.METHODS is None or run["name"] in self.METHODS]
+        head(self, self.TITLE,
              f"diabetes bowl: raw bmi and s5 (κ = {r['kappa']:.1f}) · full-batch gradients · lr = {r['lr']} for all, "
              f"ρ = {r['rho']}")
-        B = bowl_panel(r)
         n = len(r["runs"][0]["gap"]) - 1
-        lp = LogPlot(center=(4.6, 0.35), width=3.9, height=2.6, n_steps=n, x_step=50, y_range=(-6, 4),
-                     y_labels=[-6, -3, 0, 3], header="L − L*")
+        B, lp = valley_layout(r, n)
         texts = {"SGD": "SGD lands on the valley floor, then crawls along it",
                  "SGD+Momentum": "momentum: speeds along the valley, keeps swinging across",
                  "Nesterov": "Nesterov: the look-ahead gradient damps the swing"}
-        legend_hdr = Text("steps to 1% of the loss gap", font_size=19, color=MUTED)
-        legend_hdr.move_to([B["frame"].get_left()[0], -1.75, 0], aligned_edge=LEFT)
-        rows = []
-        for i, run in enumerate(r["runs"]):
-            col = OPT_COLOR[run["name"]]
-            row = VGroup(Line(ORIGIN, 0.35 * RIGHT, color=col, stroke_width=5), Text(run["name"], font_size=21, color=col),
-                         Text(f"{run['steps']}", font_size=21, color=col, weight=BOLD)).arrange(RIGHT, buff=0.15)
-            row.move_to([B["frame"].get_left()[0] + 3.6 * i, -2.15, 0], aligned_edge=LEFT)
-            rows.append(row)
+        legend_hdr, rows = None, []
+        if not CLEAN:
+            legend_hdr = Text("steps to 1% of the loss gap", font_size=19, color=MUTED)
+            legend_hdr.move_to([B["frame"].get_left()[0], -1.75, 0], aligned_edge=LEFT)
+            for i, run in enumerate(runs):
+                col = OPT_COLOR[run["name"]]
+                row = VGroup(Line(ORIGIN, 0.35 * RIGHT, color=col, stroke_width=5),
+                             Text(run["name"], font_size=21, color=col),
+                             Text(f"{run['steps']}", font_size=21, color=col, weight=BOLD)).arrange(RIGHT, buff=0.15)
+                row.move_to([B["frame"].get_left()[0] + 3.6 * i, -2.15, 0], aligned_edge=LEFT)
+                rows.append(row)
 
         c = swap(self, None, "the narrow valley of Problem #1, start w = 0")
         self.play(FadeIn(B["frame"]), Create(B["contours"]), FadeIn(B["hlab"]), FadeIn(B["vlab"]), run_time=1.4)
         self.play(FadeIn(B["start"]), FadeIn(B["star"]), Create(lp.ax), FadeIn(lp.ylab), FadeIn(lp.xlab),
                   FadeIn(lp.header), run_time=0.9)
         self.wait(0.5)
-        prev = []
-        for i, run in enumerate(r["runs"]):
-            col = OPT_COLOR[run["name"]]
-            c = swap(self, c, texts[run["name"]], color=col)
-            tr = Trace([B["win"].w(q) for q in run["path"]], col, width=2.4, dot_r=0.025, head_r=0.07)
-            lt = Trace(lp.pts(run["gap"]), col, width=2.0, head_r=0.04)
-            self.add(tr, lt)
-            run_steps(self, [tr, lt], [n], [5.2])
-            tr.freeze(), lt.freeze()
-            anims = [FadeIn(rows[i])] + ([FadeIn(legend_hdr)] if i == 0 else [])
-            anims += [p.animate.set_opacity(0.3) for p in prev]
-            self.play(*anims, run_time=0.5)
-            prev.append(VGroup(tr.line, tr.dots, tr.head))
-        steps = [run["steps"] for run in r["runs"]]
-        c = swap(self, c, f"1% of the loss gap: {steps[0]}, {steps[1]} and {steps[2]} steps")
+        c = valley_runs(self, c, B, lp, runs, n, texts, rows, legend_hdr, run_time=5.2)
+        steps = [run["steps"] for run in runs]
+        c = swap(self, c, f"1% of the loss gap: {', '.join(map(str, steps[:-1]))} and {steps[-1]} steps")
         self.wait(2.8)
+
+
+class MomentumValley(MomentumNesterov):
+    """MomentumNesterov with SGD and SGD+Momentum only: the same runs (optim_real.momentum_nesterov(), lr 0.05, rho 0.9):
+    SGD crawls along the valley floor, momentum speeds along it. Target: p2 "Solves the previous problems" (replaces
+    the GIF); made for the slide version (DLC_CLEAN=1, renders/w01/clean/)."""
+    TITLE = "Momentum"
+    METHODS = ("SGD", "SGD+Momentum")
 
 
 # =====================================================================================================
@@ -570,50 +711,48 @@ class AdaptiveMethods(Scene):
     sweep (lowest loss after 100 steps, path inside the plotted window). The adaptive methods divide each coordinate by
     its own gradient scale, so w2 (s5) moves as fast as w1 (bmi); AdaGrad's steps shrink, RMSProp's do not.
     Numbers: optim_real.adaptive_methods(). Target: p2 RMSProp and Adam slides (replaces the screen recordings)."""
+    TITLE = "Adaptive learning rates"
+    METHODS = None                                   # None: all four runs (RMSPropValley keeps two)
 
     def construct(self):
         r = opt.adaptive_methods()
-        head(self, "Adaptive learning rates",
+        runs = [run for run in r["runs"] if self.METHODS is None or run["name"] in self.METHODS]
+        head(self, self.TITLE,
              f"diabetes bowl: raw bmi and s5 (κ = {r['kappa']:.1f}) · full batch · lr of each from a sweep")
-        B = bowl_panel(r)
         n = r["num_steps"]
-        lp = LogPlot(center=(4.6, 0.35), width=3.9, height=2.6, n_steps=n, x_step=50, y_range=(-6, 4),
-                     y_labels=[-6, -3, 0, 3], header="L − L*")
+        B, lp = valley_layout(r, n)
         texts = {"SGD+Momentum": "SGD+Momentum: swings across the valley",
                  "AdaGrad": "AdaGrad: a step size per coordinate, shrinking over time",
                  "RMSProp": "RMSProp: a leaky average, the steps keep their size",
                  "Adam": "Adam: RMSProp plus momentum, with bias correction"}
-        legend_hdr = Text(f"learning rate · L − L* after {n} steps", font_size=19, color=MUTED)
-        legend_hdr.move_to([B["frame"].get_left()[0], -1.7, 0], aligned_edge=LEFT)
-        rows = []
-        for i, run in enumerate(r["runs"]):
-            col = OPT_COLOR[run["name"]]
-            row = VGroup(Line(ORIGIN, 0.35 * RIGHT, color=col, stroke_width=5),
-                         mtext(f"{run['name']}  lr {run['lr']:g} · {fmt_e(run['final_gap'])}", 21, col)
-                         ).arrange(RIGHT, buff=0.15)
-            row.move_to([B["frame"].get_left()[0] + 5.4 * (i % 2), -2.08 - 0.4 * (i // 2), 0], aligned_edge=LEFT)
-            rows.append(row)
+        legend_hdr, rows = None, []
+        if not CLEAN:
+            legend_hdr = Text(f"learning rate · L − L* after {n} steps", font_size=19, color=MUTED)
+            legend_hdr.move_to([B["frame"].get_left()[0], -1.7, 0], aligned_edge=LEFT)
+            for i, run in enumerate(runs):
+                col = OPT_COLOR[run["name"]]
+                row = VGroup(Line(ORIGIN, 0.35 * RIGHT, color=col, stroke_width=5),
+                             mtext(f"{run['name']}  lr {run['lr']:g} · {fmt_e(run['final_gap'])}", 21, col)
+                             ).arrange(RIGHT, buff=0.15)
+                row.move_to([B["frame"].get_left()[0] + 5.4 * (i % 2), -2.08 - 0.4 * (i // 2), 0], aligned_edge=LEFT)
+                rows.append(row)
 
         c = swap(self, None, "the same narrow valley, start w = 0")
         self.play(FadeIn(B["frame"]), Create(B["contours"]), FadeIn(B["hlab"]), FadeIn(B["vlab"]), run_time=1.4)
         self.play(FadeIn(B["start"]), FadeIn(B["star"]), Create(lp.ax), FadeIn(lp.ylab), FadeIn(lp.xlab),
                   FadeIn(lp.header), run_time=0.9)
         self.wait(0.5)
-        prev = []
-        for i, run in enumerate(r["runs"]):
-            col = OPT_COLOR[run["name"]]
-            c = swap(self, c, texts[run["name"]], color=col)
-            tr = Trace([B["win"].w(q) for q in run["path"]], col, width=2.4, dot_r=0.025, head_r=0.07)
-            lt = Trace(lp.pts(run["gap"]), col, width=2.0, head_r=0.04)
-            self.add(tr, lt)
-            run_steps(self, [tr, lt], [n], [4.6])
-            tr.freeze(), lt.freeze()
-            anims = [FadeIn(rows[i])] + ([FadeIn(legend_hdr)] if i == 0 else [])
-            anims += [p.animate.set_opacity(0.3) for p in prev]
-            self.play(*anims, run_time=0.5)
-            prev.append(VGroup(tr.line, tr.dots, tr.head))
+        c = valley_runs(self, c, B, lp, runs, n, texts, rows, legend_hdr, run_time=4.6)
         c = swap(self, c, "per-coordinate scaling undoes the bad feature scales")
         self.wait(2.8)
+
+
+class RMSPropValley(AdaptiveMethods):
+    """AdaptiveMethods with SGD+Momentum and RMSProp only: the same swept runs (optim_real.adaptive_methods(): lr 0.03
+    and 1): momentum swings across the valley, RMSProp's per-coordinate step goes straight along it. Target: p2
+    "RMSProp" (replaces the screen recording); made for the slide version (DLC_CLEAN=1, renders/w01/clean/)."""
+    TITLE = "RMSProp"
+    METHODS = ("SGD+Momentum", "RMSProp")
 
 
 # =====================================================================================================
@@ -631,8 +770,13 @@ class MuonOrthogonalize(Scene):
         n = len(rel)
         head(self, "Muon: orthogonalize the update",
              f"CIFAR-10, 2-layer MLP: W1's SGD-momentum buffer M ({r['shape'][0]} × {r['shape'][1]}) after one epoch")
-        base_y, top_y, ymax = -1.95, 1.65, 1.25
-        x0, x1 = -6.2, 1.55
+        if CLEAN:      # slide version: taller bars, a larger Newton-Schulz panel, short axis labels, no credit line
+            base_y, top_y, ymax, hdr_y = -2.75, 2.45, 1.25, 2.95
+            x0, x1 = -6.3, 1.35
+        else:
+            base_y, top_y, ymax, hdr_y = -1.95, 1.65, 1.25, 2.05
+            x0, x1 = -6.2, 1.55
+        fs = 22 if CLEAN else 18           # tick and axis labels
         pitch = (x1 - x0) / (n - 1)
         bw = 0.68 * pitch
         hy = lambda v: max((top_y - base_y) * v / ymax, 0.006)
@@ -644,27 +788,31 @@ class MuonOrthogonalize(Scene):
         axis = Line([x0 - 0.2, base_y, 0], [x1 + 0.2, base_y, 0], color=MUTED, stroke_width=2)
         one = DashedLine([x0 - 0.2, base_y + hy(1), 0], [x1 + 0.2, base_y + hy(1), 0], color=MUTED, stroke_width=1.5,
                          dash_length=0.08)
-        one_lab = Text("1", font_size=20, color=MUTED).next_to(one, LEFT, buff=0.1)
-        ticks = VGroup(*[Text(f"{k}", font_size=18, color=MUTED).move_to([x0 + (k - 1) * pitch, base_y - 0.25, 0])
+        one_lab = Text("1", font_size=24 if CLEAN else 20, color=MUTED).next_to(one, LEFT, buff=0.1)
+        ticks = VGroup(*[Text(f"{k}", font_size=fs, color=MUTED).move_to([x0 + (k - 1) * pitch, base_y - 0.25, 0])
                          for k in (1, 25, 50, 75, 100)])
-        klab = Text("direction (largest σ first)", font_size=18, color=MUTED).next_to(ticks, DOWN, buff=0.12)
+        klab = Text("direction" if CLEAN else "direction (largest σ first)", font_size=fs, color=MUTED) \
+            .next_to(ticks, DOWN, buff=0.12)
         bars = bars_at(rel)
-        hdr = mtext("σ / σ<sub>max</sub>", 24).move_to([(x0 + x1) / 2, 2.05, 0])
+        hfs = 28 if CLEAN else 24          # the header: σ / σmax, then Newton-Schulz step t
+        hdr = mtext("σ / σ<sub>max</sub>", hfs).move_to([(x0 + x1) / 2, hdr_y, 0])
 
         # one Newton-Schulz step on a singular value: p(s) = a s + b s^3 + c s^5
-        pc, pw = np.array([4.75, -0.2, 0]), 3.2
+        pc, pw = np.array([4.75, -0.2, 0]), 3.9 if CLEAN else 3.2
         P = lambda s, v: pc + np.array([(s / ymax - 0.5) * pw, (v / ymax - 0.5) * pw, 0])
         pax = VGroup(Line(P(0, 0), P(ymax, 0), color=MUTED, stroke_width=2),
                      Line(P(0, 0), P(0, ymax), color=MUTED, stroke_width=2))
         ident = DashedLine(P(0, 0), P(ymax, ymax), color=MUTED, stroke_width=1.5, dash_length=0.08)
         curve = ParametricFunction(lambda s: P(s, muon_demo.ns_map(s)), t_range=[0, 1.205], color=PURPLE_,
-                                   stroke_width=4)
-        ptick = VGroup(*[Text(f"{v:g}", font_size=18, color=MUTED).next_to(P(v, 0), DOWN, buff=0.1) for v in (0, 0.5, 1)],
-                       *[Text(f"{v:g}", font_size=18, color=MUTED).next_to(P(0, v), LEFT, buff=0.1) for v in (0.5, 1)])
-        pxl = Text("σ before the step", font_size=19, color=MUTED).next_to(P(ymax / 2, 0), DOWN, buff=0.42)
-        pyl = Text("σ after the step", font_size=19, color=MUTED).next_to(P(0, ymax), UP, buff=0.12) \
-            .align_to(P(0, ymax), LEFT)
-        credit = Text("Newton–Schulz code: Keller Jordan, Muon (MIT license)", font_size=15, color=MUTED) \
+                                   stroke_width=4.5 if CLEAN else 4)
+        ptick = VGroup(*[Text(f"{v:g}", font_size=fs, color=MUTED).next_to(P(v, 0), DOWN, buff=0.1) for v in (0, 0.5, 1)],
+                       *[Text(f"{v:g}", font_size=fs, color=MUTED).next_to(P(0, v), LEFT, buff=0.1) for v in (0.5, 1)])
+        pxl = Text("σ before" if CLEAN else "σ before the step", font_size=24 if CLEAN else 19, color=MUTED) \
+            .next_to(P(ymax / 2, 0), DOWN, buff=0.42)
+        pyl = Text("σ after" if CLEAN else "σ after the step", font_size=24 if CLEAN else 19, color=MUTED) \
+            .next_to(P(0, ymax), UP, buff=0.12).align_to(P(0, ymax), LEFT)
+        credit = VGroup() if CLEAN else \
+            Text("Newton–Schulz code: Keller Jordan, Muon (MIT license)", font_size=15, color=MUTED) \
             .next_to(pxl, DOWN, buff=0.3).align_to(P(ymax, 0), RIGHT)
 
         c = swap(self, None, f"the {n} singular values of M, divided by the largest")
@@ -676,14 +824,15 @@ class MuonOrthogonalize(Scene):
         self.play(*[Indicate(b, color=RED_, scale_factor=1.0) for b in bars[:5]], run_time=1.2)
         self.wait(0.8)
         c = swap(self, c, "Newton–Schulz starts from M / ‖M‖: every σ below 1")
-        ns_hdr = Text("Newton–Schulz step 0", font_size=24).move_to(hdr)
+        ns_hdr = Text("Newton–Schulz step 0", font_size=hfs).move_to(hdr)
         self.play(Transform(bars, bars_at(sv[0])), FadeOut(hdr), FadeIn(ns_hdr), run_time=1.0)
         num = ns_hdr[-1]                                     # the step number: swapped alone below
         self.wait(0.6)
         c = swap(self, c, "each step: σ ← 3.4445σ − 4.7750σ<sup>3</sup> + 2.0315σ<sup>5</sup>", color=PURPLE_)
-        self.play(FadeIn(pax), FadeIn(ptick), FadeIn(pxl), FadeIn(pyl), Create(ident), FadeIn(credit), run_time=0.6)
+        self.play(FadeIn(pax), FadeIn(ptick), FadeIn(pxl), FadeIn(pyl), Create(ident),
+                  *([] if CLEAN else [FadeIn(credit)]), run_time=0.6)
         self.play(Create(curve), run_time=1.2)
-        dots = VGroup(*[Dot(P(v, v), radius=0.035, color=PURPLE_) for v in sv[0]])
+        dots = VGroup(*[Dot(P(v, v), radius=0.042 if CLEAN else 0.035, color=PURPLE_) for v in sv[0]])
         self.play(FadeIn(dots), run_time=0.4)
         for t in range(1, len(sv)):
             if t == 1:
@@ -693,7 +842,7 @@ class MuonOrthogonalize(Scene):
                                    stroke_width=1.2, stroke_opacity=0.6) for k in range(n)])
             self.play(Create(arrows), *[d.animate.move_to(P(sv[t - 1][k], sv[t][k])) for k, d in enumerate(dots)],
                       run_time=0.8 * slow)
-            new_num = Text(f"{t}", font_size=24).move_to(num, aligned_edge=LEFT)
+            new_num = Text(f"{t}", font_size=hfs).move_to(num, aligned_edge=LEFT)
             self.play(Transform(bars, bars_at(sv[t])), FadeOut(num, shift=0.15 * UP), FadeIn(new_num, shift=0.15 * UP),
                       *[d.animate.move_to(P(sv[t][k], sv[t][k])) for k, d in enumerate(dots)], FadeOut(arrows),
                       run_time=0.9 * slow)
