@@ -1,6 +1,7 @@
 """Week 2 (convolutional networks). Render one scene:
     manim -qh w02_cnns.py ConvSliding
-Real numbers: ConvSliding convolves matplotlib's grace_hopper.jpg with numpy; ResidualHighway and GradCAMReveal read
+Real numbers: ConvSliding convolves matplotlib's grace_hopper.jpg with numpy; BatchNormSteps reads
+code/data/batchnorm_steps.json (code/batchnorm_steps.py); ResidualHighway and GradCAMReveal read
 data/w02_resgrads.json and data/w02_gradcam.npz, written by data/w02_make_data.py.
 """
 import json
@@ -495,4 +496,127 @@ class GradCAMReveal(Scene):
         self.play(FadeIn(acc))
         self.wait(2)
         cap = swap_caption(self, cap, "a shortcut: high accuracy for the wrong reason — Grad-CAM exposes it", color=PURPLE_)
+        self.wait(2.5)
+
+
+# =====================================================================================================
+class BatchNormSteps(Scene):
+    """Target: lecture 3, slide "Batch normalization, step by step" (after "Batch Normalization"). Real activations from
+    code/batchnorm_steps.py: 3 of the 100 features of the lecture-2 MLP's BatchNorm layer, trained on CIFAR-10, for a
+    batch of 8 test images. Per feature: the batch mean and std, x_hat = (x - mu) / sigma (every feature lands on mean
+    0, std 1), then the learned y = gamma * x_hat + beta. Test time: one image alone has no spread to divide by, so the
+    running mean and std from training take the place of the batch statistics."""
+
+    def construct(self):
+        D = json.loads((Path(__file__).parent / "code/data/batchnorm_steps.json").read_text())
+        B, T = D["batch"], D["test"]
+        title(self, "Batch normalization, step by step",
+              "3 of the 100 features of a trained layer, a batch of 8 CIFAR-10 images")
+        ys = [2.25, 0.0, -2.25] if CLEAN else [1.55, -0.3, -2.15]
+        X0, X1, LO, HI = -4.6, 5.8, -7.0, 7.0
+        px = lambda v: X0 + (v - LO) * (X1 - X0) / (HI - LO)
+
+        def mu_mark(v, y, color=INK, dashed=False):
+            L = DashedLine if dashed else Line
+            return L([px(v), y - 0.34, 0], [px(v), y + 0.34, 0], color=color, stroke_width=4)
+
+        def bracket(lo, hi, y, color=ORANGE_, dashed=False):
+            L = DashedLine if dashed else Line
+            yb = y + 0.5
+            return VGroup(L([px(lo), yb, 0], [px(hi), yb, 0], color=color, stroke_width=4),
+                          Line([px(lo), yb - 0.1, 0], [px(lo), yb + 0.1, 0], color=color, stroke_width=4),
+                          Line([px(hi), yb - 0.1, 0], [px(hi), yb + 0.1, 0], color=color, stroke_width=4))
+
+        num = lambda v: f"{v:.2f}".replace("-", "−")
+
+        def mu_label(txt, v, y, color=INK):
+            return Text(txt, font_size=22, color=color).move_to([px(v), y - 0.62, 0])
+
+        def sig_label(txt, hi, y, color=ORANGE_):
+            return Text(txt, font_size=22, color=color).next_to([px(hi), y + 0.5, 0], RIGHT, buff=0.15)
+
+        zero = DashedLine([px(0), ys[0] + 0.8, 0], [px(0), ys[-1] - 0.45, 0], color=MUTED, stroke_width=2,
+                          dash_length=0.08)
+        zlab = Text("0", font_size=20, color=MUTED).next_to(zero, UP, buff=0.08)
+        axes, labels = VGroup(), VGroup()
+        for j, y in enumerate(ys):
+            axes.add(Line([X0, y, 0], [X1, y, 0], color=MUTED, stroke_width=2))
+            labels.add(Text(f"feature {j + 1}", font_size=24).move_to([X0 - 1.15, y, 0]))
+        dots = [VGroup(*[Dot([px(row[j]), y, 0], radius=0.1, color=BLUE_, fill_opacity=0.85) for row in B["x"]])
+                for j, y in enumerate(ys)]
+        cap = caption("a batch: 8 images, each feature with its own mean and spread")
+        self.play(FadeIn(axes), FadeIn(labels), FadeIn(zero), FadeIn(zlab), run_time=0.8)
+        phase = Text("training: the batch's own μ and σ", font_size=26, color=BLUE_).to_corner(UL, buff=0.35)
+        self.play(*[FadeIn(d, lag_ratio=0.1) for d in dots], FadeIn(cap), *([FadeIn(phase)] if CLEAN else []),
+                  run_time=1.2)
+
+        # batch statistics, per feature
+        mus = [mu_mark(B["mu"][j], y) for j, y in enumerate(ys)]
+        mls = [mu_label(f"μ = {num(B['mu'][j])}", B["mu"][j], y) for j, y in enumerate(ys)]
+        brs = [bracket(B["mu"][j] - B["sigma"][j], B["mu"][j] + B["sigma"][j], y) for j, y in enumerate(ys)]
+        sls = [sig_label(f"σ = {B['sigma'][j]:.2f}", B["mu"][j] + B["sigma"][j], y) for j, y in enumerate(ys)]
+        self.play(*[Create(m) for m in mus], *[FadeIn(m) for m in mls], run_time=1.0)
+        self.play(*[Create(b) for b in brs], *[FadeIn(s) for s in sls], run_time=1.0)
+        cap = swap_caption(self, cap, "mean and std of each feature, over the batch")
+        self.wait(1.0)
+
+        # x_hat = (x - mu) / sigma
+        cap = swap_caption(self, cap, "x̂ = (x − μ) / σ: every feature now has mean 0 and std 1")
+        anims = []
+        for j, y in enumerate(ys):
+            anims += [d.animate.move_to([px(row[j]), y, 0]) for d, row in zip(dots[j], B["x_hat"])]
+            anims += [Transform(mus[j], mu_mark(0, y)), Transform(mls[j], mu_label("μ = 0", 0, y)),
+                      Transform(brs[j], bracket(-1, 1, y)), Transform(sls[j], sig_label("σ = 1", 1, y))]
+        self.play(*anims, run_time=1.8)
+        self.wait(1.0)
+
+        # y = gamma x_hat + beta (learned)
+        cap = swap_caption(self, cap, "y = γ x̂ + β: a learned scale and shift for each feature", color=PURPLE_)
+        anims = []
+        for j, y in enumerate(ys):
+            g, b = B["gamma"][j], B["beta"][j]
+            anims += [d.animate.move_to([px(row[j]), y, 0]).set_color(PURPLE_) for d, row in zip(dots[j], B["y"])]
+            anims += [Transform(mus[j], mu_mark(b, y, PURPLE_)), Transform(mls[j], mu_label(f"β = {num(b)}", b, y, PURPLE_)),
+                      Transform(brs[j], bracket(b - g, b + g, y, PURPLE_)),
+                      Transform(sls[j], sig_label(f"γ = {g:.2f}", b + g, y, PURPLE_))]
+        self.play(*anims, run_time=1.8)
+        self.wait(1.6)
+
+        # test time: one image, the running statistics
+        cap = swap_caption(self, cap, "test time: one image alone has no spread to divide by", color=GREEN_)
+        new_phase = Text("test: running μ and σ from training", font_size=26, color=GREEN_).to_corner(UL, buff=0.35)
+        self.play(*[FadeOut(VGroup(dots[j], mus[j], mls[j], brs[j], sls[j])) for j in range(3)],
+                  *([Transform(phase, new_phase)] if CLEAN else []), run_time=0.7)
+        one = [Dot([px(T["x"][j]), y, 0], radius=0.13, color=GREEN_) for j, y in enumerate(ys)]
+        zero_sd = Text("one image: σ = 0", font_size=22, color=RED_).next_to(one[0], UP, buff=0.3)
+        self.play(*[FadeIn(o, scale=1.6) for o in one], FadeIn(zero_sd), run_time=0.9)
+        self.wait(0.8)
+        rm, rs = T["running_mean"], T["running_sigma"]
+        rmus = [mu_mark(rm[j], y, GREEN_, dashed=True) for j, y in enumerate(ys)]
+        rmls = [mu_label(f"running μ = {num(rm[j])}", rm[j], y, GREEN_) for j, y in enumerate(ys)]
+        rbrs = [bracket(rm[j] - rs[j], rm[j] + rs[j], y, GREEN_, dashed=True) for j, y in enumerate(ys)]
+        rsls = [sig_label(f"running σ = {rs[j]:.2f}", rm[j] + rs[j], y, GREEN_) for j, y in enumerate(ys)]
+        cap = swap_caption(self, cap, "so BN uses the running mean and std, averaged over training batches", color=GREEN_)
+        self.play(FadeOut(zero_sd), *[Create(m) for m in rmus], *[FadeIn(m) for m in rmls],
+                  *[Create(b) for b in rbrs], *[FadeIn(s) for s in rsls], run_time=1.2)
+        self.wait(1.4)
+        anims = []
+        for j, y in enumerate(ys):
+            anims += [one[j].animate.move_to([px(T["x_hat"][j]), y, 0]),
+                      Transform(rmus[j], mu_mark(0, y, GREEN_, dashed=True)),
+                      Transform(rmls[j], mu_label("0", 0, y, GREEN_)),
+                      Transform(rbrs[j], bracket(-1, 1, y, GREEN_, dashed=True)),
+                      Transform(rsls[j], sig_label("1", 1, y, GREEN_))]
+        self.play(*anims, run_time=1.5)
+        anims = []
+        for j, y in enumerate(ys):
+            g, b = B["gamma"][j], B["beta"][j]
+            anims += [one[j].animate.move_to([px(T["y"][j]), y, 0]).set_color(PURPLE_),
+                      Transform(rmus[j], mu_mark(b, y, PURPLE_, dashed=True)),
+                      Transform(rmls[j], mu_label(f"β = {num(b)}", b, y, PURPLE_)),
+                      Transform(rbrs[j], bracket(b - g, b + g, y, PURPLE_, dashed=True)),
+                      Transform(rsls[j], sig_label(f"γ = {g:.2f}", b + g, y, PURPLE_))]
+        cap = swap_caption(self, cap, "then the same γ and β: the output no longer depends on the rest of the batch",
+                           color=PURPLE_)
+        self.play(*anims, run_time=1.5)
         self.wait(2.5)

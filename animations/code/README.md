@@ -36,3 +36,14 @@ bmi (kg/m²) and s5 (log serum triglycerides) predicting disease progression aft
 each takes `compute_gradient(w)` and returns the whole path. `cifar_experiment.py` and `muon_cifar.py` are the code of the
 lecture-2 slides (CIFAR-10 loss curves; Muon vs SGD-momentum vs AdamW). `zeropower_via_newtonschulz5` is Keller Jordan's
 (github.com/KellerJordan/Muon, MIT license).
+
+## Lecture 3 (architectures)
+
+Clean clips for these slides are in `../renders/w04/clean/` and `../renders/w02/clean/` (captioned versions one folder up).
+
+| Slide | Code | Function | What to change |
+|---|---|---|---|
+| "GPT-2 showed - autoregressive decoding is all you need" (clip AutoregressiveDecoding, `../w04_transformers.py`) | `gpt2_decoding.py` | the main loop: forward pass, softmax, argmax, append | sample instead of the argmax (`torch.multinomial(p, 1)`), divide the logits by a temperature, or run 40 steps: greedy decoding starts repeating itself |
+| "Batch normalization, step by step" (clip BatchNormSteps, `../w02_cnns.py`) | `batchnorm_steps.py` (data and split from `cifar_experiment.py`) | `mlp_bn`, `train`, `batch_norm_train`, `batch_norm_test` | `momentum=0.5` in `BatchNorm1d`: the running mean follows only the last few batches; a batch of 2 or 64: the batch statistics move away from / towards the running ones; `BatchNorm2d` after a conv layer: one mean and std per channel, over N × H × W |
+| "Plain vs residual on CIFAR-10" (chart, no clip) | `resnet_degradation.py` (data and split from `cifar_experiment.py`) | `Net(n, residual)`, `Block`, `run(n, residual, lr, epochs)` | `n=18` (110 layers); remove the batch norm from the plain nets; random crop + flip and 160 epochs for the paper's test errors |
+| "Count the parameters" (no clip) | `count_params.py` | `count(module)` | `nhead=8` or a 200-token input: same count; `nn.LSTM(12, 20, bias=False)`: 2,560; `nn.GRU(32, 64)`: three gates instead of four |

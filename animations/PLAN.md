@@ -40,6 +40,7 @@ built step by step, a bottom caption naming the current step, real numbers where
 | 2 | ConvSliding | a 3×3 edge kernel slides over a real image, the feature map fills in | p3 53–60 |
 | 2 | ReceptiveField | stacked 3×3 convs: the region one output sees grows by 2 per layer | p3 72–74 |
 | 2 | ResidualHighway | plain deep net vs ResNet: gradient magnitude per layer, the skip path as a highway | p4 |
+| 2 | BatchNormSteps | batch norm on real activations (3 of 100 features of the lecture-2 MLP with a BatchNorm layer, a batch of 8 CIFAR-10 images): per-feature mean and std over the batch, x̂ = (x − μ)/σ, the learned γ, β; test time: one image, the running mean and std (`w02_cnns.py`; numbers from `code/batchnorm_steps.py`) | lecture 3, after p3 89 (new slide) |
 | 2 | GradCAMReveal | Grad-CAM heat appears over the object; a shortcut model looks at the background | exam B |
 | 3 | RNNUnroll | RNN unrolled through time; gradient shrinks going back (∏ tanh'·w) | p6 |
 | 3 | Seq2SeqBottleneck | one context vector squeezes the sentence; attention lets each output word look back | p7 2–17 |
@@ -48,6 +49,7 @@ built step by step, a bottom caption naming the current step, real numbers where
 | 3 | BPEMerges | byte-pair merges build tokens from characters | T04 |
 | 4 | SelfAttentionHeads | real GPT-2 heads: coreference, previous token, broad | p7 64–70, 80 ✅ |
 | 4 | CausalMask | masked self-attention and next-token generation | p8 33–34 ✅ |
+| 4 | AutoregressiveDecoding | the real GPT-2 (124M) continues "Deep learning is": one forward pass per token, the top 5 of 50,257 next-token probabilities (' a' 15.2% … ' world' 31.6%), the argmax appended, nine passes → "Deep learning is a very powerful tool for learning about the world" (`w04_transformers.py`; numbers from `code/gpt2_decoding.py`) | lecture 3, l8 55 (replaces the GPT-2 GIF) |
 | 4 | PermutationEquivariance | shuffle tokens → outputs shuffle the same way; add positions → no longer | p7 71–77 |
 | 4 | TransformerBlock | residual stream: attention mixes across tokens, MLP acts per token | p7 84–92 |
 | 4 | RoPERotation | queries/keys rotated by position; the score depends only on the offset | L8b |

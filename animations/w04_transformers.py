@@ -550,3 +550,90 @@ class ViTPatches(Scene):
                            color=PURPLE_)
         self.play(GrowArrow(harr), FadeIn(head))
         self.wait(2.5)
+
+
+# ----------------------------------------------------------------------------------------------------------------------
+class AutoregressiveDecoding(Scene):
+    """Target: lecture 3, slide "GPT-2 showed - autoregressive decoding is all you need" (replaces the GIF). The real
+    GPT-2 (124M) continues "Deep learning is": every step is one forward pass over all tokens so far, the top-5 of the
+    next-token distribution (real probabilities from code/gpt2_decoding.py), the most likely token moving down into the
+    input, and the next pass. Ends on "Deep learning is a very powerful tool for learning about the world"."""
+
+    def construct(self):
+        import json
+        from pathlib import Path
+        D = json.loads((Path(__file__).parent / "code/data/gpt2_decoding.json").read_text())
+        title(self, "Autoregressive decoding with GPT-2", "one forward pass per token; the output becomes the input")
+        words = [w.strip() for w in D["prompt"]] + [s["chosen"].strip() for s in D["steps"]]
+        n0 = len(D["prompt"])
+
+        # input row: final layout of all tokens, prompt filled, the rest as empty slots
+        y_in = -2.75 if not CLEAN else -2.95
+        texts = [Text(w, font_size=24) for w in words]
+        widths = [max(t.width + 0.3, 0.6) for t in texts]
+        gap = 0.1
+        total = sum(widths) + gap * (len(words) - 1)
+        xs, x = [], -total / 2
+        for w in widths:
+            xs.append(x + w / 2)
+            x += w + gap
+
+        def slot(i, filled):
+            r = RoundedRectangle(corner_radius=0.08, width=widths[i], height=0.62, stroke_width=2,
+                                 stroke_color=(BLUE_ if i < n0 else GREEN_) if filled else MUTED,
+                                 fill_color=("#DBEAFE" if i < n0 else WHITE) if filled else WHITE, fill_opacity=1)
+            return r.move_to([xs[i], y_in, 0])
+
+        empties = VGroup(*[DashedVMobject(slot(i, False), num_dashes=24) for i in range(n0, len(words))])
+        prompt = VGroup(*[VGroup(slot(i, True), texts[i].copy().move_to([xs[i], y_in, 0])) for i in range(n0)])
+
+        model = RoundedRectangle(corner_radius=0.25, width=3.6, height=1.0, stroke_color=PURPLE_, stroke_width=3,
+                                 fill_color="#EDE9FE", fill_opacity=1).move_to([0, -1.05, 0])
+        mlab = VGroup(Text("GPT-2", font_size=34, weight=BOLD, color=PURPLE_),
+                      Text("124M parameters", font_size=18, color=MUTED)).arrange(DOWN, buff=0.06).move_to(model)
+        a_in = Arrow([0, y_in + 0.36, 0], model.get_bottom(), buff=0.05, color=INK, stroke_width=4,
+                     max_tip_length_to_length_ratio=0.25)
+        a_out = Arrow(model.get_top(), [0, 0.55 if CLEAN else 0.12, 0], buff=0.05, color=INK, stroke_width=4,
+                      max_tip_length_to_length_ratio=0.25)
+        self.play(FadeIn(prompt), Create(empties), run_time=0.8)
+        self.play(FadeIn(model), FadeIn(mlab), GrowArrow(a_in), GrowArrow(a_out), run_time=0.8)
+        cap = caption("one forward pass over everything so far → probabilities for all 50,257 tokens")
+        self.play(FadeIn(cap))
+
+        # top-5 panel: fixed scale so that confidence is comparable across steps
+        y_top, dy, bh = (3.25, 0.58, 0.4) if CLEAN else (2.3, 0.48, 0.34)    # below the title when captioned
+        x_lab, scale = -0.35, 5.2 / 0.35
+        row = VGroup(prompt)
+        for k, step in enumerate(D["steps"]):
+            hl = SurroundingRectangle(row, color=PURPLE_, buff=0.08, stroke_width=3)
+            self.play(Create(hl), run_time=0.35)
+            panel = VGroup()
+            bars_ = []
+            for j, (t, p) in enumerate(step["top"]):
+                y = y_top - j * dy
+                lab = Text(t.strip() or "␣", font_size=24, color=GREEN_ if j == 0 else INK)
+                lab.move_to([x_lab, y, 0], aligned_edge=RIGHT)
+                bar = Rectangle(width=max(0.03, p * scale), height=bh, stroke_width=0,
+                                fill_color=GREEN_ if j == 0 else MUTED, fill_opacity=0.9)
+                bar.move_to([x_lab + 0.2, y, 0], aligned_edge=LEFT)
+                val = Text(f"{100 * p:.1f}%", font_size=20, color=GREEN_ if j == 0 else MUTED)
+                val.next_to(bar, RIGHT, buff=0.12)
+                bars_.append(bar)
+                panel.add(VGroup(lab, bar, val))
+            self.play(LaggedStart(*[GrowFromEdge(g[1], LEFT) for g in panel], lag_ratio=0.08),
+                      *[FadeIn(g[0]) for g in panel], *[FadeIn(g[2]) for g in panel], FadeOut(hl), run_time=0.7)
+            if k == 0:
+                cap = swap_caption(self, cap, "greedy decoding: take the most likely token and append it to the input")
+            i = n0 + k
+            new = VGroup(slot(i, True), texts[i].copy().set_color(GREEN_).move_to([xs[i], y_in, 0]))
+            fly = panel[0][0].copy()
+            self.play(fly.animate.move_to(new[1]).set_color(GREEN_), FadeOut(empties[k]), run_time=0.75)
+            self.add(new)
+            self.remove(fly)
+            self.play(FadeIn(new[0]), FadeOut(panel), run_time=0.35)
+            self.bring_to_front(new[1])
+            row.add(new)
+            if k == 1:
+                cap = swap_caption(self, cap, "repeat: the new token joins the input of the next pass", color=GREEN_)
+        cap = swap_caption(self, cap, "nine passes, nine tokens: the whole answer is generated this way", color=PURPLE_)
+        self.wait(2.0)
