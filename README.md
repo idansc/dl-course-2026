@@ -22,7 +22,7 @@ Slides, tutorial notebooks and the weekly plan. Course 89-6877-01, semester A 20
 | 12 | Agents, harnesses and retrieval | [L12b](slides/2026-updates/L12b_agents_harness_arcagi3_2026.pdf) | [T12_agents_retrieval](tutorials/T12_agents_retrieval.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/idansc/dl-course-2026/blob/main/tutorials/T12_agents_retrieval.ipynb) · [recap](tutorials/recap/T12_agents_retrieval_recap.pdf) |
 | 13 | Summary and exam rehearsal | [p13](slides/lectures/p13.pdf) | [T13_exam_practice](tutorials/T13_exam_practice.ipynb) [![Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/idansc/dl-course-2026/blob/main/tutorials/T13_exam_practice.ipynb) · [recap](tutorials/recap/T13_exam_practice_recap.pdf) |
 
-`p1`–`p13` are the course lectures, `lecture3_architectures` the 2026 lecture 3 (CNN architectures, RNN/LSTM, attention and the Transformer), `L8b`–`L12b` the 2026 update decks (borrowed pages are credited on each slide), `mm*` the Multimodal DL lectures.
+`p1`–`p13` are the course lectures, `lecture3_architectures` the 2026 lecture 3 (CNN architectures, RNN/LSTM, attention), `L8b`–`L12b` the 2026 update decks (borrowed pages are credited on each slide), `mm*` the Multimodal DL lectures.
 
 ## Tutorials
 
