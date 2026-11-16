@@ -6,6 +6,9 @@ Correlated: z2 is nearly a copy of z1 (correlation 0.9), so one direction (the d
 spread and the other almost none. Whitened (ZCA: subtract the mean, multiply by the inverse square root of the
 covariance): every direction has variance 1 and no direction repeats another, covariance = I.
 
+A direction is an arrow from the centre, a mix of the numbers: the two arrows are z1 + z2 and z2 - z1 (the principal
+directions, length 2 standard deviations), labelled with their share of the spread: 96% / 4% before, 50% / 50% after.
+
 Printed: the covariance, the correlation and the share of the spread along each principal direction, before and
 after. Run:  python whitening_cloud.py OUT.png      (also writes data/whitening_cloud.json)
 """
@@ -47,6 +50,10 @@ data.mkdir(exist_ok=True)
 # ---------------------------------------------------------------- the figure: two square panels and an arrow
 plt.rcParams["font.family"] = "Arial"
 BLUE, GRID, AXIS = "#2F5597", "#E3E3E3", "#A6A6A6"
+ARROW = "#C55A11"
+DIRS = [np.array([1.0, 1.0]) / np.sqrt(2), np.array([-1.0, 1.0]) / np.sqrt(2)]
+LABEL_AT = [((1.75, 2.62), (-1.75, 0.75)), ((1.75, 2.15), (-1.75, 2.15))]   # where the two labels go, per panel
+panels_done = []
 fig = plt.figure(figsize=(10.4, 4.0))
 panels = [fig.add_axes([0.02, 0.02, 0.37, 0.96]), fig.add_axes([0.61, 0.02, 0.37, 0.96])]
 for ax, pts, cov in zip(panels, (Z, W), (C, CW)):
@@ -65,6 +72,13 @@ for ax, pts, cov in zip(panels, (Z, W), (C, CW)):
     ax.set(xlim=(-3.3, 3.3), ylim=(-3.3, 3.3), aspect="equal", xticks=[], yticks=[])
     for s in ax.spines.values():
         s.set_visible(False)
+    sd = np.sqrt([u @ cov @ u for u in DIRS])                         # spread along z1 + z2 and z2 - z1
+    for u, s_, name, share, at in zip(DIRS, sd, ("$z_1 + z_2$", "$z_2 - z_1$"), sd ** 2 / (sd ** 2).sum(), LABEL_AT[len(panels_done)]):
+        ax.add_patch(FancyArrowPatch((0, 0), tuple(2 * s_ * u), arrowstyle="-|>", mutation_scale=18, lw=2.6,
+                                     color=ARROW, zorder=5, shrinkA=0, shrinkB=0))
+        ax.text(*at, f"{name}: {share:.0%}", ha="center", va="center", fontsize=15, color=ARROW, zorder=6,
+                bbox=dict(boxstyle="round,pad=0.15", fc="white", ec="none", alpha=0.85))
+    panels_done.append(ax)
     ax.text(3.2, -0.12, "$z_1$", ha="right", va="top", fontsize=15, color="#595959")
     ax.text(0.12, 3.2, "$z_2$", ha="left", va="top", fontsize=15, color="#595959")
 fig.patches.append(FancyArrowPatch((0.425, 0.5), (0.575, 0.5), transform=fig.transFigure, arrowstyle="-|>",
