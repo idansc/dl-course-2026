@@ -3,6 +3,8 @@ computes, before and after training (LeJEPA, Balestriero & LeCun, 2025, arXiv 25
 Algorithm 1).
 
 Top: a lumpy 2-D embedding cloud (four clumps, as an encoder that groups images into a few tight clusters).
+Both clouds are whitened exactly (mean 0, covariance I), so VICReg's variance and covariance terms are 0 for both:
+VICReg cannot tell them apart, SIGReg can.
 Bottom: a sample of N(0, I), the round cloud that minimizing SIGReg pushes the embeddings towards (an
 illustration of the target, not the output of a trained encoder). For three random unit
 directions the 1-D projections ("slices") are drawn against N(0, 1), with their Epps-Pulley statistic (the paper's
@@ -42,16 +44,34 @@ rng = np.random.default_rng(7)
 N = 512
 centers = np.array([[-1.4, 1.0], [1.1, 1.4], [1.5, -0.8], [-0.9, -1.3]])
 lumpy = centers[rng.integers(0, 4, N)] + 0.2 * rng.standard_normal((N, 2))
-lumpy = (lumpy - lumpy.mean(0)) / lumpy.std()                      # same overall scale as N(0, I)
 gauss = rng.standard_normal((N, 2))
+
+
+def whiten(x):                                                       # mean 0, covariance exactly I
+    x = x - x.mean(0)
+    ev, V = np.linalg.eigh(np.cov(x.T))
+    return x @ V @ np.diag(ev ** -0.5) @ V.T
+
+
+def vicreg(x, mu=25.0, nu=1.0, eps=1e-4):
+    """VICReg's anti-collapse terms (Bardes et al., 2022, Eqs. 1-4, weights of its code): mu * variance hinge +
+    nu * covariance; the invariance term needs two views and is left out."""
+    d = x.shape[1]
+    v = np.mean(np.maximum(0.0, 1.0 - np.sqrt(x.var(0, ddof=1) + eps)))
+    c = np.cov(x.T)
+    return float(mu * v + nu * ((c ** 2).sum() - (np.diag(c) ** 2).sum()) / d)
+
+
+lumpy, gauss = whiten(lumpy), whiten(gauss)
 ANGLES = (10.0, 100.0, 165.0)          # three directions where the lumps show (130-155 deg would look Gaussian-ish)
 DIRS = [np.array([math.cos(math.radians(a)), math.sin(math.radians(a))]) for a in ANGLES]
 
 stats = {}
 for name, x in (("before", lumpy), ("after", gauss)):
-    stats[name] = {"slices": [epps_pulley(x @ u) for u in DIRS], "sigreg_1024": sigreg(x, 1024, np.random.default_rng(1))}
+    stats[name] = {"slices": [epps_pulley(x @ u) for u in DIRS], "sigreg_1024": sigreg(x, 1024, np.random.default_rng(1)),
+                   "vicreg": vicreg(x)}
     print(f"{name:6s}: slices " + ", ".join(f"{v:6.1f}" for v in stats[name]["slices"]) +
-          f"   SIGReg over 1,024 directions {stats[name]['sigreg_1024']:.1f}")
+          f"   SIGReg over 1,024 directions {stats[name]['sigreg_1024']:.1f}   VICReg terms {stats[name]['vicreg']:.2f}")
 OUTP = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("sigreg_steps.png")
 data = Path(__file__).parent / "data"
 data.mkdir(exist_ok=True)
@@ -87,9 +107,12 @@ for r, (name, x) in enumerate((("before", lumpy), ("after", gauss))):
     v = fig.add_subplot(gs[r, 4])
     v.axis("off")
     big = stats[name]["sigreg_1024"]
-    v.text(0.5, 0.62, f"{big:.1f}", ha="center", va="center", fontsize=34, color=RED if r == 0 else "#2F5597",
+    v.text(0.5, 0.80, f"{big:.1f}", ha="center", va="center", fontsize=32, color=RED if r == 0 else "#2F5597",
            fontweight="bold")
-    v.text(0.5, 0.28, "SIGReg", ha="center", va="center", fontsize=15, color=GREY)
+    v.text(0.5, 0.56, "SIGReg", ha="center", va="center", fontsize=15, color=GREY)
+    v.text(0.5, 0.28, f"{stats[name]['vicreg']:.2f}", ha="center", va="center", fontsize=22, color=GREY,
+           fontweight="bold")
+    v.text(0.5, 0.06, "VICReg", ha="center", va="center", fontsize=15, color=GREY)
 fig.text(0.012, 0.69, "lumpy", rotation=90, va="center", fontsize=17, color=INK)
 fig.text(0.012, 0.24, "Gaussian", rotation=90, va="center", fontsize=17, color=INK)
 for xpos, num, label in ((0.10, "1", "random directions"), (0.40, "2", "each slice vs N(0, 1): a test value"),
