@@ -2,8 +2,9 @@
 of whitening, Barlow Twins and VICReg is (after Jia-Bin Huang's "How AI Learned to Teach Itself [JEPA]", YouTube 2026,
 the Whitened MSE part).
 
-Left: a batch, one column per image, each column the image's embedding z (d = 4 numbers z_1 ... z_4). A row is one
-number across the batch. Right: the covariance matrix C (d x d) compares every two rows: C_44 = how much z_4 varies,
+Left: a batch of N images, one column per image, each column the image's embedding z (d numbers z_1 ... z_d; d = 4
+drawn). A row is one number across the batch. The caption names N and d (his "you mention N,D but you never define
+them?", 18 Nov 2026). Right: the covariance matrix C (d x d) compares every two rows: C_44 = how much z_4 varies,
 C_24 = whether z_2 and z_4 go up and down together. Drawn as the target I (blue diagonal), as on the next slide.
 
 Run:  python batch_covariance.py OUT.png
@@ -20,13 +21,13 @@ plt.rcParams["font.family"] = "Arial"
 plt.rcParams["mathtext.fontset"] = "stix"
 BLUE, LIGHT, TINT, GREY, INK = "#2F5597", "#EDEDED", "#DDE7F3", "#7F7F7F", "#000000"
 ORANGE = "#ED7D31"
-W, H = 11.6, 3.6
+W, H = 11.6, 3.95
 fig = plt.figure(figsize=(W, H))
 ax = fig.add_axes([0, 0, 1, 1])
 ax.set(xlim=(0, W), ylim=(0, H), aspect="equal")
 ax.axis("off")
 
-D, ROW, TOP = 4, 0.56, 2.95                       # 4 numbers per image; row spacing; y of z_1
+D, ROW, TOP = 4, 0.56, 3.3                        # d = 4 numbers per image; row spacing; y of z_1
 rows_y = [TOP - j * ROW for j in range(D)]
 cols_x = [0.85 + k * 0.62 for k in range(5)] + [0.85 + 4 * 0.62 + 0.94]   # five columns, a gap (...), column N
 
@@ -38,14 +39,17 @@ for k, x in enumerate(cols_x):
                                 boxstyle="round,pad=0,rounding_size=0.1", fc="none", ec="#A6A6A6", lw=1.6, zorder=2))
     for y in rows_y:
         ax.add_patch(Circle((x, y), 0.15, fc="white", ec="#595959", lw=1.5, zorder=3))
-    ax.text(x, rows_y[-1] - 0.52, "N" if k == len(cols_x) - 1 else str(k + 1), ha="center", va="center",
-            fontsize=14, color=GREY)
+    ax.text(x, rows_y[-1] - 0.52, "$N$" if k == len(cols_x) - 1 else str(k + 1), ha="center", va="center",
+            fontsize=15 if k == len(cols_x) - 1 else 14, color=GREY)
 ax.text((cols_x[4] + cols_x[5]) / 2, (rows_y[0] + rows_y[-1]) / 2, "$\\cdots$", ha="center", va="center", fontsize=22,
         color=GREY)
 for j, y in enumerate(rows_y):
     ax.text(0.35, y, f"$z_{j + 1}$", ha="center", va="center", fontsize=21, color=INK)
-ax.text((cols_x[0] + cols_x[-1]) / 2, rows_y[-1] - 0.9, "a batch: one column per image, $d$ numbers each",
-        ha="center", va="center", fontsize=16, color=INK)
+Y1, Y2 = rows_y[-1] - 0.95, rows_y[-1] - 1.3                            # the two caption lines
+ax.text((cols_x[0] + cols_x[-1]) / 2, Y1, "a batch of $N$ images, one column each", ha="center", va="center",
+        fontsize=16, color=INK)
+ax.text((cols_x[0] + cols_x[-1]) / 2, Y2, "each column: $d$ numbers (here $d = 4$)", ha="center", va="center",
+        fontsize=16, color=INK)
 
 YM = (rows_y[0] + rows_y[-1]) / 2
 ax.add_patch(FancyArrowPatch((cols_x[-1] + 0.5, YM), (6.05, YM), arrowstyle="-|>", mutation_scale=24, lw=2.2,
@@ -69,8 +73,7 @@ ax.text(xr, rows_y[1], "$z_2$ with $z_4$:\ndo they move together?", ha="left", v
         color=INK, linespacing=1.2)
 ax.text(xr, rows_y[3], "$z_4$ with itself:\nhow much does it vary?", ha="left", va="center", fontsize=15, color=INK,
         linespacing=1.2)
-ax.text(X0 + 2 * (S + G) - G / 2, rows_y[-1] - 0.9, "$C$:  $d \\times d$", ha="center", va="center", fontsize=17,
-        color=INK)
+ax.text(X0 + 2 * (S + G) - G / 2, Y1, "$C$:  $d \\times d$", ha="center", va="center", fontsize=17, color=INK)
 
 OUTP = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("batch_covariance.png")
 fig.savefig(OUTP, dpi=220, facecolor="white")
